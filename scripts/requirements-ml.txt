@@ -7,8 +7,9 @@ numpy>=1.24.0
 scikit-learn>=1.3.0
 joblib>=1.3.0
 
-# For LSTM Autoencoder (optional, but recommended for best anomaly detection)
-tensorflow>=2.13.0
+# TensorFlow (LSTM Autoencoder) — ไม่ติดตั้งบน Starter plan (DISABLE_LSTM=1)
+# หากต้องการเปิดใช้ LSTM ให้ uncomment บรรทัดด้านล่างและ upgrade เป็น Standard plan (2GB RAM)
+# tensorflow-cpu>=2.15.0,<2.17.0
 
 # Note: ml_ac_rl.py (Q-Learning AC Optimizer) uses only numpy, scikit-learn, pickle
 # No additional dependencies needed

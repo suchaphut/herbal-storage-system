@@ -53,6 +53,9 @@ const ENABLE_PYTHON_ML =
 const USE_ENSEMBLE_ANOMALY =
   process.env.USE_ENSEMBLE_ANOMALY === '1' || process.env.USE_ENSEMBLE_ANOMALY === 'true'
 
+const DISABLE_LSTM =
+  process.env.DISABLE_LSTM === '1' || process.env.DISABLE_LSTM === 'true'
+
 // ============================================================================
 // Configuration
 // ============================================================================
@@ -704,6 +707,7 @@ export async function analyzeRoom(
           data: ifData,
           contamination: ML_CONFIG.anomaly.isolationForestContamination,
           feature_set: 'environmental',
+          ...(DISABLE_LSTM && { weights: { isolation_forest: 0.6, lstm_autoencoder: 0, one_class_svm: 0.4 } }),
         })
         precomputedIfScore = ensembleOut.scores[ensembleOut.scores.length - 1] ?? 0.5
         const modelsUsed = ensembleOut.meta?.models_used ?? []
