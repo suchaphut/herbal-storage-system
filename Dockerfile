@@ -14,7 +14,12 @@ COPY . .
 
 ENV NEXT_TELEMETRY_DISABLED=1
 ENV NODE_ENV=production
+# Dummy secrets for build-time only (Next.js collects page data at build)
+# Real values are injected at runtime via environment variables
+ARG JWT_SECRET=build-time-placeholder
+ENV JWT_SECRET=$JWT_SECRET
 RUN npm run build
+ENV JWT_SECRET=
 RUN npm prune --omit=dev
 
 # ── Stage 2: Production ─────────────────────────────────────────────────────
