@@ -1,25 +1,23 @@
 # ──────────────────────────────────────────────────────────────────────────────
 # Dockerfile — IoT Herbal Storage System (Next.js + Python ML)
-# Optimized for Render deployment
+# Works on Railway (8GB RAM — full ML) and Render (512MB — set DISABLE_LSTM=1)
 # ──────────────────────────────────────────────────────────────────────────────
 
-# ── Stage 1: Dependencies ────────────────────────────────────────────────────
-FROM node:20-slim AS deps
-WORKDIR /app
-COPY package.json package-lock.json ./
-RUN npm ci --omit=dev
-
-# ── Stage 2: Build ───────────────────────────────────────────────────────────
+# ── Stage 1: Build Next.js ──────────────────────────────────────────────────
 FROM node:20-slim AS builder
 WORKDIR /app
-COPY --from=deps /app/node_modules ./node_modules
+
+COPY package.json package-lock.json ./
+RUN npm ci
+
 COPY . .
 
 ENV NEXT_TELEMETRY_DISABLED=1
 ENV NODE_ENV=production
 RUN npm run build
+RUN npm prune --omit=dev
 
-# ── Stage 3: Production ─────────────────────────────────────────────────────
+# ── Stage 2: Production ─────────────────────────────────────────────────────
 FROM node:20-slim AS runner
 WORKDIR /app
 
