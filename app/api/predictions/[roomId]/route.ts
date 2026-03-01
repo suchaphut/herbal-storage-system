@@ -30,10 +30,7 @@ export async function GET(
       )
     }
 
-    const historicalData = await db.getSensorDataByRoom(roomId, 288)
-    const envData = historicalData.filter(
-      (d): d is EnvironmentalSensorData => d.type === 'environmental'
-    )
+    const envData = await db.getSensorDataByRoomAndType(roomId, 'environmental', 288) as EnvironmentalSensorData[]
     const aggregatedEnv = aggregateEnvironmentalByTime(envData, 1, roomId)
     if (aggregatedEnv.length < 6) {
       return NextResponse.json(

@@ -44,23 +44,28 @@ export function SensorChart({ data, room, title = 'ข้อมูลเซ็�
     : []
 
   const aggregatedData = envData.reduce((acc, item) => {
-    const hour = new Date(item.timestamp).toLocaleTimeString('th-TH', {
+    const d = new Date(item.timestamp)
+    // Use date + HH:mm as key to avoid merging data across different days
+    const key = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')} ${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`
+    const display = d.toLocaleTimeString('th-TH', {
       hour: '2-digit',
       minute: '2-digit',
     })
-    if (!acc[hour]) {
-      acc[hour] = {
-        time: hour,
+    if (!acc[key]) {
+      acc[key] = {
+        key,
+        time: display,
         temperatures: [] as number[],
         humidities: [] as number[],
       }
     }
-    acc[hour].temperatures.push(item.readings.temperature)
-    acc[hour].humidities.push(item.readings.humidity)
+    acc[key].temperatures.push(item.readings.temperature)
+    acc[key].humidities.push(item.readings.humidity)
     return acc
-  }, {} as Record<string, { time: string; temperatures: number[]; humidities: number[] }>)
+  }, {} as Record<string, { key: string; time: string; temperatures: number[]; humidities: number[] }>)
 
   const chartData = Object.values(aggregatedData)
+    .sort((a, b) => a.key.localeCompare(b.key))
     .map((item) => ({
       time: item.time,
       temperature: item.temperatures.reduce((a, b) => a + b, 0) / item.temperatures.length,

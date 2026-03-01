@@ -61,6 +61,33 @@ export function AlertsList({ alerts, onResolve, onResolveAll }: AlertsListProps)
     }
   }
 
+  const getSourceBadge = (alert: Alert) => {
+    const source = alert.data?.source
+    if (!source) return null
+    if (source === 'ml_environmental') {
+      return (
+        <Badge variant="secondary" className="text-xs bg-purple-100 text-purple-700 dark:bg-purple-900/30 dark:text-purple-300">
+          🤖 ML สิ่งแวดล้อม
+        </Badge>
+      )
+    }
+    if (source === 'ml_power') {
+      return (
+        <Badge variant="secondary" className="text-xs bg-blue-100 text-blue-700 dark:bg-blue-900/30 dark:text-blue-300">
+          🤖 ML พลังงาน
+        </Badge>
+      )
+    }
+    if (source === 'threshold') {
+      return (
+        <Badge variant="secondary" className="text-xs bg-orange-100 text-orange-700 dark:bg-orange-900/30 dark:text-orange-300">
+          📏 ค่าจริงเกินขีดจำกัด
+        </Badge>
+      )
+    }
+    return null
+  }
+
   const formatTime = (date: Date) => {
     const now = new Date()
     const diff = now.getTime() - new Date(date).getTime()
@@ -126,11 +153,12 @@ export function AlertsList({ alerts, onResolve, onResolveAll }: AlertsListProps)
               >
                 <div className="mt-0.5">{getSeverityIcon(alert.severity)}</div>
                 <div className="flex-1 space-y-1">
-                  <div className="flex items-center gap-2">
+                  <div className="flex flex-wrap items-center gap-2">
                     {getSeverityBadge(alert.severity)}
                     <span className="text-xs text-muted-foreground">
                       {getTypeBadge(alert.type)}
                     </span>
+                    {getSourceBadge(alert)}
                   </div>
                   <p className="text-sm text-foreground">{alert.message}</p>
                   <div className="flex items-center gap-1 text-xs text-muted-foreground">

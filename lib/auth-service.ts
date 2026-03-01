@@ -12,8 +12,12 @@ import type {
 } from './types'
 
 // Environment variables (must be set in production)
-if (process.env.NODE_ENV === 'production' && !process.env.JWT_SECRET) {
-  throw new Error('[auth] JWT_SECRET environment variable is required in production')
+if (!process.env.JWT_SECRET) {
+  if (process.env.NODE_ENV === 'production') {
+    throw new Error('[auth] JWT_SECRET environment variable is required in production')
+  } else {
+    console.warn('[auth] WARNING: JWT_SECRET is not set. Using insecure default. Set JWT_SECRET in .env.local')
+  }
 }
 const JWT_SECRET = new TextEncoder().encode(
   process.env.JWT_SECRET || 'herbal-storage-jwt-secret-key-change-in-production'
@@ -72,13 +76,20 @@ async function verifyToken(token: string): Promise<AuthSession | null> {
 // Convert User to SafeUser (remove sensitive data, normalize MongoDB docs)
 function toSafeUser(user: User | Record<string, unknown>): SafeUser {
   const u = '_id' in user && typeof user._id !== 'string' ? normalizeUser(user as never) : (user as User)
+  const prefs = u.notificationPreferences
   return {
     _id: u._id,
     email: u.email,
     name: u.name,
     role: u.role,
     assignedRooms: u.assignedRooms || [],
-    notificationPreferences: u.notificationPreferences || { discord: false, line: false, email: true },
+    notificationPreferences: {
+      discord: prefs?.discord ?? false,
+      hasDiscordWebhook: !!(prefs?.discordWebhookUrl),
+      line: prefs?.line ?? false,
+      hasLineToken: !!(prefs?.lineAccessToken),
+      email: prefs?.email ?? true,
+    },
     lastLogin: u.lastLogin ?? null,
     createdAt: u.createdAt ?? new Date(),
     isActive: u.isActive ?? true,

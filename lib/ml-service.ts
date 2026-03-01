@@ -1,13 +1,14 @@
 /**
- * Machine Learning Service for IoT Herbal Storage Monitoring System
+ * Machine Learning Service — Orchestrator
  *
- * This module provides:
- * 1. Time Series Prediction - Holt-Winters Triple Exponential Smoothing
- * 2. Anomaly Detection - Z-Score, IQR, Rate of Change, Isolation Forest principles
- * 3. Dynamic Thresholds - ML-based adaptive thresholds
- * 4. User-Friendly Results - Thai language interpretations
+ * This module orchestrates all ML functionality:
+ * 1. Time Series Prediction (Holt-Winters / Prophet)
+ * 2. Anomaly Detection (Z-Score, IQR, IF, Ensemble)
+ * 3. Full Room Analysis Pipeline
  *
- * Reference: Documented ML approach for herbal medicine storage monitoring
+ * Sub-modules in lib/ml/:
+ *   utils.ts, isolation-forest.ts, holt-winters.ts,
+ *   anomaly-helpers.ts, user-friendly.ts, power-anomaly.ts
  */
 
 import { computePredictionMetrics } from './ml-metrics'
@@ -15,28 +16,42 @@ import {
   runProphet,
   runIsolationForest,
   runIsolationForestSync,
+  runEnsembleAnomaly,
   type ProphetOutput,
 } from './ml-python-bridge'
 import { getCachedPrediction, setCachedPrediction } from './ml-cache'
-import { th } from './i18n'
 import { dbService } from './db-service'
 import type {
   EnvironmentalSensorData,
-  PowerSensorData,
   PredictionResult,
   AnomalyDetectionResult,
   MLModelConfig,
   MLAnalysisResult,
-  UserFriendlyPrediction,
-  UserFriendlyAnomaly,
   AnomalyType,
   PredictionMetrics,
-  PowerAnomalyResult,
   Room,
 } from './types'
 
+// Sub-module imports
+import { mean, standardDeviation, winsorizeData } from './ml/utils'
+import { isolationForestScores } from './ml/isolation-forest'
+import { holtWintersPredict } from './ml/holt-winters'
+import {
+  detectZScoreAnomaly,
+  detectRapidChange,
+  detectSensorMalfunction,
+  calculateDynamicThreshold,
+} from './ml/anomaly-helpers'
+import { generateUserFriendlyPrediction, generateUserFriendlyAnomaly } from './ml/user-friendly'
+
+// Re-export sub-modules for external consumers
+export { detectPowerAnomaly, type PowerAnomalyOptions } from './ml/power-anomaly'
+
 const ENABLE_PYTHON_ML =
   process.env.ENABLE_PYTHON_ML === '1' || process.env.ENABLE_PYTHON_ML === 'true'
+
+const USE_ENSEMBLE_ANOMALY =
+  process.env.USE_ENSEMBLE_ANOMALY === '1' || process.env.USE_ENSEMBLE_ANOMALY === 'true'
 
 // ============================================================================
 // Configuration
@@ -51,8 +66,8 @@ const ML_CONFIG: MLModelConfig = {
     horizonHours: 6, // Predict 6 hours ahead
   },
   anomaly: {
-    zScoreThreshold: 2.5, // Standard deviations for anomaly
-    isolationForestContamination: 0.05, // 5% expected anomaly rate
+    zScoreThreshold: 3.0, // Standard deviations for anomaly (stricter)
+    isolationForestContamination: 0.02, // 2% expected anomaly rate (less false positives)
     minSamplesForTraining: 288, // 24 hours * 12 points/hour
     rapidChangeThresholds: {
       temperature: 3, // 3°C change per 5 minutes is suspicious
@@ -64,522 +79,18 @@ const ML_CONFIG: MLModelConfig = {
 // Model version for tracking
 const MODEL_VERSION = 'HoltWinters-v2.0'
 
-// ============================================================================
-// Statistical Utilities
-// ============================================================================
-
-/**
- * Calculate mean of array
- */
-function mean(data: number[]): number {
-  if (data.length === 0) return 0
-  return data.reduce((sum, val) => sum + val, 0) / data.length
-}
-
-/**
- * Calculate standard deviation
- */
-function standardDeviation(data: number[], dataMean?: number): number {
-  if (data.length === 0) return 1
-  const m = dataMean ?? mean(data)
-  const squaredDiffs = data.map((val) => Math.pow(val - m, 2))
-  return Math.sqrt(squaredDiffs.reduce((sum, val) => sum + val, 0) / data.length)
-}
-
-/**
- * Calculate quartiles for IQR method
- */
-function calculateQuartiles(data: number[]): { q1: number; q2: number; q3: number; iqr: number } {
-  const sorted = [...data].sort((a, b) => a - b)
-  const n = sorted.length
-
-  const q1 = sorted[Math.floor(n * 0.25)]
-  const q2 = sorted[Math.floor(n * 0.5)]
-  const q3 = sorted[Math.floor(n * 0.75)]
-  const iqr = q3 - q1
-
-  return { q1, q2, q3, iqr }
-}
-
-/**
- * IQR-based outlier detection and winsorization
- */
-function winsorizeData(data: number[]): number[] {
-  const { q1, q3, iqr } = calculateQuartiles(data)
-  const lowerBound = q1 - 1.5 * iqr
-  const upperBound = q3 + 1.5 * iqr
-
-  return data.map((val) => {
-    if (val < lowerBound) return lowerBound
-    if (val > upperBound) return upperBound
-    return val
-  })
-}
-
-/**
- * Linear interpolation for missing data
- */
-function interpolateMissing(data: (number | null)[]): number[] {
-  const result: number[] = []
-
-  for (let i = 0; i < data.length; i++) {
-    if (data[i] !== null) {
-      result.push(data[i] as number)
-    } else if (i > 0 && i < data.length - 1) {
-      // Find next non-null value
-      let nextIdx = i + 1
-      while (nextIdx < data.length && data[nextIdx] === null) nextIdx++
-
-      if (nextIdx < data.length && data[nextIdx] !== null) {
-        // Linear interpolation
-        const prevVal = result[result.length - 1]
-        const nextVal = data[nextIdx] as number
-        const steps = nextIdx - i + 1
-        result.push(prevVal + (nextVal - prevVal) / steps)
-      } else {
-        // Forward fill
-        result.push(result[result.length - 1])
-      }
-    } else if (i === 0 && data.length > 1) {
-      // Find first non-null value and backfill
-      let nextIdx = 1
-      while (nextIdx < data.length && data[nextIdx] === null) nextIdx++
-      result.push(nextIdx < data.length ? (data[nextIdx] as number) : 0)
-    }
-  }
-
-  return result
-}
-
-/**
- * Create sliding windows for time series analysis
- */
-function createSlidingWindows(data: number[], windowSize: number, step: number = 1): number[][] {
-  const windows: number[][] = []
-  for (let i = 0; i <= data.length - windowSize; i += step) {
-    windows.push(data.slice(i, i + windowSize))
-  }
-  return windows
-}
-
-// ============================================================================
-// Isolation Forest (simplified) - Anomaly Score from path length
-// ============================================================================
-
-const IF_N_TREES = 20
-const IF_MAX_DEPTH = 10
-const IF_SUBAMPLE = 256
-
-/**
- * Single isolation tree: random splits, path length = number of edges to isolate point
- */
-function isolationTreePathLength(
-  point: number[],
-  data: number[][],
-  depth: number,
-  maxDepth: number
-): number {
-  if (data.length <= 1 || depth >= maxDepth) return depth
-
-  const dim = point.length
-  const col = Math.floor(Math.random() * dim)
-  const values = data.map((row) => row[col]).filter((v) => v != null)
-  if (values.length < 2) return depth
-
-  const min = Math.min(...values)
-  const max = Math.max(...values)
-  if (min === max) return depth
-
-  const split = min + Math.random() * (max - min)
-  const left: number[][] = []
-  const right: number[][] = []
-  for (const row of data) {
-    if (row[col] < split) left.push(row)
-    else right.push(row)
-  }
-
-  const goLeft = point[col] < split
-  const child = goLeft ? left : right
-  return 1 + isolationTreePathLength(point, child, depth + 1, maxDepth)
-}
-
-/**
- * c(n) normalizing constant for Isolation Forest
- */
-function c(n: number): number {
-  if (n <= 1) return 0
-  return 2 * (Math.log(n - 1) + 0.5772156649) - (2 * (n - 1)) / n
-}
-
-/**
- * Isolation Forest anomaly score per row (0 = normal, 1 = anomaly)
- * data: rows of [temperature, humidity] (or more features)
- */
-function isolationForestScores(data: number[][]): number[] {
-  if (data.length === 0) return []
-  const n = Math.min(data.length, IF_SUBAMPLE)
-  const scores: number[] = []
-
-  for (let i = 0; i < data.length; i++) {
-    const point = data[i]
-    let pathSum = 0
-    for (let t = 0; t < IF_N_TREES; t++) {
-      const idx = Array.from({ length: data.length }, (_, j) => j)
-      for (let k = idx.length - 1; k > 0; k--) {
-        const j = Math.floor(Math.random() * (k + 1));
-        [idx[k], idx[j]] = [idx[j], idx[k]]
-      }
-      const sample = idx.slice(0, n).map((j) => data[j])
-      const path = isolationTreePathLength(point, sample, 0, IF_MAX_DEPTH)
-      pathSum += path
-    }
-    const avgPath = pathSum / IF_N_TREES
-    const score = Math.pow(2, -avgPath / c(n))
-    scores.push(Math.min(1, Math.max(0, score)))
-  }
-  return scores
-}
-
-// ============================================================================
-// Holt-Winters Triple Exponential Smoothing
-// ============================================================================
-
-interface HoltWintersState {
-  level: number
-  trend: number
-  seasonals: number[]
-}
-
-/**
- * Initialize Holt-Winters state from historical data
- */
-function initializeHoltWinters(
-  data: number[],
-  seasonLength: number
-): HoltWintersState {
-  // Initial level: average of first season
-  const firstSeason = data.slice(0, Math.min(seasonLength, data.length))
-  const level = mean(firstSeason)
-
-  // Initial trend: average difference between corresponding points in first two seasons
-  let trend = 0
-  if (data.length >= seasonLength * 2) {
-    for (let i = 0; i < seasonLength; i++) {
-      trend += (data[seasonLength + i] - data[i]) / seasonLength
-    }
-    trend /= seasonLength
-  }
-
-  // Initial seasonal factors
-  const seasonals: number[] = []
-  for (let i = 0; i < seasonLength; i++) {
-    if (i < data.length) {
-      seasonals.push(data[i] - level)
-    } else {
-      seasonals.push(0)
-    }
-  }
-
-  return { level, trend, seasonals }
-}
-
-/**
- * Holt-Winters prediction step
- */
-function holtWintersPredict(
-  data: number[],
-  steps: number,
-  config: typeof ML_CONFIG.prediction
-): { predictions: number[]; state: HoltWintersState } {
-  const { alpha, beta, gamma, seasonLength } = config
-
-  // Winsorize data to handle outliers
-  const cleanData = winsorizeData(data)
-
-  // Initialize state
-  let state = initializeHoltWinters(cleanData, seasonLength)
-
-  // Update state with all historical data
-  for (let t = seasonLength; t < cleanData.length; t++) {
-    const seasonIdx = t % seasonLength
-    const observation = cleanData[t]
-
-    // Update level
-    const newLevel =
-      alpha * (observation - state.seasonals[seasonIdx]) +
-      (1 - alpha) * (state.level + state.trend)
-
-    // Update trend
-    const newTrend = beta * (newLevel - state.level) + (1 - beta) * state.trend
-
-    // Update seasonal
-    state.seasonals[seasonIdx] =
-      gamma * (observation - newLevel) + (1 - gamma) * state.seasonals[seasonIdx]
-
-    state.level = newLevel
-    state.trend = newTrend
-  }
-
-  // Generate predictions
-  const predictions: number[] = []
-  for (let h = 1; h <= steps; h++) {
-    const seasonIdx = (cleanData.length + h - 1) % seasonLength
-    const prediction = state.level + h * state.trend + state.seasonals[seasonIdx]
-    predictions.push(prediction)
-  }
-
-  return { predictions, state }
-}
-
-// ============================================================================
-// Anomaly Detection
-// ============================================================================
-
-/**
- * Z-Score based anomaly detection
- */
-function detectZScoreAnomaly(
-  current: number,
-  historical: number[],
-  threshold: number = ML_CONFIG.anomaly.zScoreThreshold
-): { isAnomaly: boolean; zScore: number } {
-  const m = mean(historical)
-  const std = standardDeviation(historical, m)
-
-  if (std === 0) return { isAnomaly: false, zScore: 0 }
-
-  const zScore = Math.abs(current - m) / std
-  return { isAnomaly: zScore > threshold, zScore }
-}
-
-/**
- * Rate of change detection
- */
-function detectRapidChange(
-  current: number,
-  previous: number,
-  maxRate: number
-): { isRapid: boolean; changeRate: number } {
-  const changeRate = Math.abs(current - previous)
-  return { isRapid: changeRate > maxRate, changeRate }
-}
-
-/**
- * Sensor malfunction detection (constant values or impossible readings)
- */
-function detectSensorMalfunction(
-  data: number[],
-  type: 'temperature' | 'humidity'
-): boolean {
-  // Check for constant values (stuck sensor)
-  const last10 = data.slice(-10)
-  if (last10.length >= 10) {
-    const allSame = last10.every((v) => v === last10[0])
-    if (allSame) return true
-  }
-
-  // Check for impossible values
-  const current = data[data.length - 1]
-  if (type === 'temperature') {
-    if (current < -40 || current > 80) return true // Impossible for storage
-  } else {
-    if (current < 0 || current > 100) return true
-  }
-
-  return false
-}
-
-/**
- * Calculate dynamic thresholds based on historical data
- */
-function calculateDynamicThreshold(
-  historicalData: number[],
-  baseMin: number,
-  baseMax: number,
-  sensitivity: number = 1.0
-): { min: number; max: number } {
-  const m = mean(historicalData)
-  const std = standardDeviation(historicalData, m)
-
-  // Dynamic threshold based on historical pattern
-  const dynamicMin = Math.min(baseMin, m - sensitivity * 2 * std)
-  const dynamicMax = Math.max(baseMax, m + sensitivity * 2 * std)
-
-  return {
-    min: Math.max(dynamicMin, baseMin - Math.abs(baseMin) * 0.2), // Don't go too far from base
-    max: Math.min(dynamicMax, baseMax + Math.abs(baseMax) * 0.2),
-  }
-}
-
-// ============================================================================
-// User-Friendly Result Generation
-// ============================================================================
-
-/**
- * Generate user-friendly prediction summary in Thai
- */
-function generateUserFriendlyPrediction(
-  predictions: PredictionResult['predictions'],
-  currentTemp: number,
-  currentHumidity: number,
-  thresholds: Room['thresholds']
-): UserFriendlyPrediction {
-  const lastPrediction = predictions[predictions.length - 1]
-  const tempTrend = lastPrediction.temperature - currentTemp
-  const humidityTrend = lastPrediction.humidity - currentHumidity
-
-  // Determine trend
-  let trend: 'increasing' | 'stable' | 'decreasing' = 'stable'
-  if (Math.abs(tempTrend) > 1 || Math.abs(humidityTrend) > 3) {
-    trend = tempTrend > 0 || humidityTrend > 0 ? 'increasing' : 'decreasing'
-  }
-
-  // Find when thresholds will be exceeded
-  let warningTime: Date | undefined
-  let riskLevel: 'safe' | 'caution' | 'danger' = 'safe'
-
-  for (const pred of predictions) {
-    const tempExceeded =
-      pred.temperature > thresholds.temperature.max ||
-      pred.temperature < thresholds.temperature.min
-    const humidityExceeded =
-      pred.humidity > thresholds.humidity.max || pred.humidity < thresholds.humidity.min
-
-    if (tempExceeded || humidityExceeded) {
-      if (!warningTime) warningTime = pred.time
-      riskLevel = 'danger'
-      break
-    }
-
-    // Caution if approaching threshold (within 80%)
-    const tempApproaching =
-      pred.temperature > thresholds.temperature.max * 0.9 ||
-      pred.temperature < thresholds.temperature.min * 1.1
-    const humidityApproaching =
-      pred.humidity > thresholds.humidity.max * 0.9 ||
-      pred.humidity < thresholds.humidity.min * 1.1
-
-    if (tempApproaching || humidityApproaching) {
-      riskLevel = 'caution'
-    }
-  }
-
-  // Generate summary in Thai
-  let summary = ''
-  if (trend === 'increasing') {
-    summary = th.prediction.increasing(
-      lastPrediction.temperature,
-      lastPrediction.humidity,
-      ML_CONFIG.prediction.horizonHours
-    )
-  } else if (trend === 'decreasing') {
-    summary = th.prediction.decreasing(
-      lastPrediction.temperature,
-      lastPrediction.humidity,
-      ML_CONFIG.prediction.horizonHours
-    )
-  } else {
-    summary = th.prediction.stable(lastPrediction.temperature, lastPrediction.humidity)
-  }
-
-  // Generate recommendation
-  let recommendation = ''
-  if (riskLevel === 'danger') {
-    if (lastPrediction.temperature > thresholds.temperature.max) {
-      recommendation = th.predictionRec.tempHigh
-    } else if (lastPrediction.humidity > thresholds.humidity.max) {
-      recommendation = th.predictionRec.humHigh
-    } else {
-      recommendation = th.predictionRec.danger
-    }
-  } else if (riskLevel === 'caution') {
-    recommendation = th.predictionRec.caution
-  } else {
-    recommendation = th.predictionRec.safe
-  }
-
-  // Determine confidence level
-  const avgConfidence = mean(predictions.map((p) => p.confidence))
-  let confidence: 'high' | 'medium' | 'low' = 'medium'
-  if (avgConfidence >= 0.8) confidence = 'high'
-  else if (avgConfidence < 0.6) confidence = 'low'
-
-  return {
-    summary,
-    confidence,
-    recommendation,
-    trend,
-    warningTime,
-    riskLevel,
-  }
-}
-
-/**
- * Generate user-friendly anomaly description in Thai
- */
-function generateUserFriendlyAnomaly(
-  anomaly: AnomalyDetectionResult
-): UserFriendlyAnomaly | undefined {
-  if (!anomaly.isAnomaly) return undefined
-
-  const possibleCauses: string[] = []
-  const recommendations: string[] = []
-
-  // Determine type description based on anomaly types
-  let typeDesc: string = th.anomaly.generic
-
-  if (anomaly.anomalyType.includes('threshold_exceeded')) {
-    typeDesc = th.anomaly.thresholdExceeded
-    possibleCauses.push(th.cause.hvacMalfunction)
-    possibleCauses.push(th.cause.doorLeftOpen)
-    recommendations.push(th.recommendation.checkHvac)
-  }
-
-  if (anomaly.anomalyType.includes('rapid_change')) {
-    typeDesc = th.anomaly.rapidChange
-    possibleCauses.push(th.cause.doorOpen)
-    possibleCauses.push(th.cause.coolingSystemToggle)
-    recommendations.push(th.recommendation.checkDoor)
-    recommendations.push(th.recommendation.checkCooling)
-  }
-
-  if (anomaly.anomalyType.includes('sensor_malfunction')) {
-    typeDesc = th.anomaly.sensorMalfunction
-    possibleCauses.push(th.cause.sensorDamaged)
-    possibleCauses.push(th.cause.sensorConnection)
-    recommendations.push(th.recommendation.checkSensor)
-    recommendations.push(th.recommendation.replaceSensor)
-  }
-
-  if (anomaly.anomalyType.includes('statistical_outlier')) {
-    typeDesc = th.anomaly.statisticalOutlier
-    possibleCauses.push(th.cause.externalFactor)
-    recommendations.push(th.recommendation.checkExternal)
-  }
-
-  // Add generic recommendations if none specific
-  if (recommendations.length === 0) {
-    recommendations.push(th.recommendation.checkRoom)
-    recommendations.push(th.recommendation.contactAdmin)
-  }
-
-  return {
-    type: typeDesc,
-    severity: anomaly.severity === 'critical' ? 'critical' : 'warning',
-    description: th.anomaly.description(typeDesc, anomaly.anomalyScore * 100),
-    possibleCauses,
-    recommendations,
-  }
-}
+// Sub-module implementations now live in lib/ml/*.ts
+// See: utils.ts, isolation-forest.ts, holt-winters.ts,
+//      anomaly-helpers.ts, user-friendly.ts, power-anomaly.ts
 
 // ============================================================================
 // Python ML (Prophet) – ใช้เมื่อ ENABLE_PYTHON_ML=1
 // ============================================================================
 
-const PYTHON_MODEL_VERSION = 'Prophet-v1.0'
+const PYTHON_MODEL_VERSION = 'Prophet-v2.0'
 
-const TEMP_RANGE = { min: 10, max: 40 }
-const HUM_RANGE = { min: 5, max: 98 }
+const TEMP_RANGE = { min: 15, max: 35 }
+const HUM_RANGE = { min: 20, max: 85 }
 
 function clipSeries(values: number[], min: number, max: number): number[] {
   return values.map((v) => (typeof v !== 'number' || Number.isNaN(v) ? min : Math.max(min, Math.min(max, v))))
@@ -627,23 +138,41 @@ async function predictionFromPython(
   const trainingPoints = meta?.training_points ? Number(meta.training_points) : 24
   const dataConfidenceFactor = Math.min(1.0, trainingPoints / 24) // < 24 points penalizes confidence
 
+  // Calculate recent data stats for sanity-checking predictions
+  const recentTemp = temperature.slice(-Math.min(10, temperature.length))
+  const recentHum = humidity.slice(-Math.min(10, humidity.length))
+  const recentTempMean = recentTemp.reduce((a, b) => a + b, 0) / recentTemp.length
+  const recentHumMean = recentHum.reduce((a, b) => a + b, 0) / recentHum.length
+  const MAX_TEMP_DEV = 5.0  // Max °C deviation from recent mean
+  const MAX_HUM_DEV = 15.0  // Max % deviation from recent mean
+
   const predictions: PredictionResult['predictions'] = rawPred.slice(0, totalSteps).map((p, i) => {
     // Confidence decreases over horizon time, multiplied by data quality factor
     const horizonConfidence = Math.max(0.5, 1 - i * 0.03)
     const confidence = horizonConfidence * dataConfidenceFactor
 
+    // Clamp to recent mean ± max deviation (prevents wild swings)
+    const clampedTemp = Math.max(
+      TEMP_RANGE.min,
+      Math.min(TEMP_RANGE.max, Math.max(recentTempMean - MAX_TEMP_DEV, Math.min(recentTempMean + MAX_TEMP_DEV, p.temperature)))
+    )
+    const clampedHum = Math.max(
+      HUM_RANGE.min,
+      Math.min(HUM_RANGE.max, Math.max(recentHumMean - MAX_HUM_DEV, Math.min(recentHumMean + MAX_HUM_DEV, p.humidity)))
+    )
+
     return {
       time: new Date(p.time),
-      temperature: Math.max(10, Math.min(40, p.temperature)),
-      humidity: Math.max(20, Math.min(95, p.humidity)),
+      temperature: clampedTemp,
+      humidity: clampedHum,
       confidence,
       upperBound: {
-        temperature: Math.min(40, p.temperature + band * (1 + i * 0.1)),
-        humidity: Math.min(95, p.humidity + band * (1 + i * 0.1)),
+        temperature: Math.min(TEMP_RANGE.max, clampedTemp + band * (1 + i * 0.05)),
+        humidity: Math.min(HUM_RANGE.max, clampedHum + band * (1 + i * 0.05)),
       },
       lowerBound: {
-        temperature: Math.max(10, p.temperature - band * (1 + i * 0.1)),
-        humidity: Math.max(20, p.humidity - band * (1 + i * 0.1)),
+        temperature: Math.max(TEMP_RANGE.min, clampedTemp - band * (1 + i * 0.05)),
+        humidity: Math.max(HUM_RANGE.min, clampedHum - band * (1 + i * 0.05)),
       },
       metric: metrics,
     }
@@ -814,16 +343,16 @@ export function predictTimeSeries(
 
     predictions.push({
       time: futureTime,
-      temperature: Math.max(10, Math.min(40, tempPred)),
-      humidity: Math.max(20, Math.min(95, humidPred)),
+      temperature: Math.max(TEMP_RANGE.min, Math.min(TEMP_RANGE.max, tempPred)),
+      humidity: Math.max(HUM_RANGE.min, Math.min(HUM_RANGE.max, humidPred)),
       confidence,
       upperBound: {
-        temperature: Math.min(40, tempPred + tempStd * bandMultiplier),
-        humidity: Math.min(95, humidPred + humidityStd * bandMultiplier),
+        temperature: Math.min(TEMP_RANGE.max, tempPred + tempStd * bandMultiplier),
+        humidity: Math.min(HUM_RANGE.max, humidPred + humidityStd * bandMultiplier),
       },
       lowerBound: {
-        temperature: Math.max(10, tempPred - tempStd * bandMultiplier),
-        humidity: Math.max(20, humidPred - humidityStd * bandMultiplier),
+        temperature: Math.max(TEMP_RANGE.min, tempPred - tempStd * bandMultiplier),
+        humidity: Math.max(HUM_RANGE.min, humidPred - humidityStd * bandMultiplier),
       },
     })
   }
@@ -1033,24 +562,28 @@ export function detectAnomaly(
     }
   }
 
-  // รวมคะแนนจาก Z-Score และ Isolation Forest
+  // รวมคะแนนจาก Z-Score และ ML model (weighted average แทน max)
   const combinedZScore = Math.sqrt((tempZScore.zScore ** 2 + humidityZScore.zScore ** 2) / 2)
-  let anomalyScore = Math.min(1, combinedZScore / 3)
-  anomalyScore = Math.max(anomalyScore, ifScore)
-  if (ifScore >= 0.6 && !anomalyTypes.includes('statistical_outlier')) {
+  const zNormalized = Math.min(1, combinedZScore / 4) // normalize: z=4 → score=1.0
+
+  // Weighted blend: Z-Score 40%, ML model 60% — ทั้งสองต้องเห็นตรงกันถึงจะ score สูง
+  let anomalyScore = 0.4 * zNormalized + 0.6 * ifScore
+
+  // Only flag as statistical_outlier from ML if score is genuinely high
+  if (ifScore >= 0.8 && !anomalyTypes.includes('statistical_outlier')) {
     anomalyTypes.push('statistical_outlier')
   }
 
-  // Boost score if multiple anomaly types detected
+  // Mild boost if multiple independent anomaly types detected
   if (anomalyTypes.length > 1) {
-    anomalyScore = Math.min(1, anomalyScore * 1.2)
+    anomalyScore = Math.min(1, anomalyScore * 1.1)
   }
 
-  // Determine severity
+  // Determine severity — higher thresholds to reduce false alarms
   let severity: 'normal' | 'warning' | 'critical' = 'normal'
-  if (anomalyScore >= 0.9 || anomalyTypes.includes('sensor_malfunction')) {
+  if (anomalyScore >= 0.85 || anomalyTypes.includes('sensor_malfunction')) {
     severity = 'critical'
-  } else if (anomalyScore >= 0.7 || anomalyTypes.includes('threshold_exceeded')) {
+  } else if (anomalyScore >= 0.6 || anomalyTypes.includes('threshold_exceeded')) {
     severity = 'warning'
   }
 
@@ -1083,10 +616,10 @@ export function detectAnomaly(
     roomId: currentData.roomId || '',
     nodeId: currentData.nodeId,
     timestamp: currentData.timestamp,
-    isAnomaly: anomalyTypes.length > 0,
+    isAnomaly: anomalyTypes.length > 0 && finalScore >= 0.4,
     anomalyScore: finalScore,
-    severity,
-    anomalyType: anomalyTypes,
+    severity: (anomalyTypes.length > 0 && finalScore >= 0.4) ? severity : 'normal',
+    anomalyType: finalScore >= 0.4 ? anomalyTypes : [],
     contributingFactors,
     expectedValues: {
       temperature: mean(temperatures),
@@ -1149,10 +682,11 @@ export async function analyzeRoom(
     prediction = predictTimeSeries(historicalData, roomId, nodeId)
   }
 
-  // Run anomaly detection — คำนวณ Isolation Forest แบบ async ก่อน แล้วส่งผลเข้า detectAnomaly
+  // Run anomaly detection — คำนวณ ML score แบบ async ก่อน แล้วส่งผลเข้า detectAnomaly
   // เพื่อป้องกัน spawnSync บล็อก event loop
   const historicalForAnomaly = historicalData.slice(0, -1)
   let precomputedIfScore: number | undefined
+  let anomalyModelName = 'Isolation Forest + Z-Score'
   if (ENABLE_PYTHON_ML) {
     const temperatures = historicalForAnomaly.map((d) => d.readings.temperature)
     const humidities = historicalForAnomaly.map((d) => d.readings.humidity)
@@ -1162,7 +696,39 @@ export async function analyzeRoom(
       ifData.push([temperatures[i], humidities[i]])
     }
     ifData.push([currentData.readings.temperature, currentData.readings.humidity])
-    if (ifData.length >= 10) {
+
+    if (USE_ENSEMBLE_ANOMALY && ifData.length >= 10) {
+      // ใช้ Ensemble Anomaly Detector (IF + LSTM + SVM)
+      try {
+        const ensembleOut = await runEnsembleAnomaly({
+          data: ifData,
+          contamination: ML_CONFIG.anomaly.isolationForestContamination,
+          feature_set: 'environmental',
+        })
+        precomputedIfScore = ensembleOut.scores[ensembleOut.scores.length - 1] ?? 0.5
+        const modelsUsed = ensembleOut.meta?.models_used ?? []
+        const modelAbbrevs = modelsUsed.map((m: string) => {
+          if (m === 'isolation_forest') return 'IF'
+          if (m === 'lstm_autoencoder') return 'LSTM'
+          if (m === 'one_class_svm') return 'SVM'
+          return m
+        })
+        anomalyModelName = `Ensemble (${modelAbbrevs.join('+')}) + Z-Score`
+      } catch (err) {
+        console.error('[ML] Ensemble anomaly failed, falling back to IF:', err instanceof Error ? err.message : err)
+        // fallback to Isolation Forest
+        try {
+          const pyOut = await runIsolationForest({
+            data: ifData,
+            contamination: ML_CONFIG.anomaly.isolationForestContamination,
+          })
+          precomputedIfScore = pyOut.scores[pyOut.scores.length - 1] ?? 0.5
+        } catch {
+          // fallback: detectAnomaly จะใช้ JS implementation แทน
+        }
+      }
+    } else if (ifData.length >= 10) {
+      // ใช้ Isolation Forest เดี่ยว
       try {
         const pyOut = await runIsolationForest({
           data: ifData,
@@ -1175,6 +741,7 @@ export async function analyzeRoom(
     }
   }
   const anomaly = detectAnomaly(currentData, historicalForAnomaly, roomConfig.thresholds, precomputedIfScore)
+  anomaly.modelName = anomalyModelName
 
   // Generate user-friendly results
   const userFriendlyPrediction = generateUserFriendlyPrediction(
@@ -1277,114 +844,5 @@ export async function processDataThroughML(
   return { prediction, anomaly }
 }
 
-// ============================================================================
-// Current / Power Sensor Anomaly (แอร์ เครื่องปรับอากาศ)
-// ============================================================================
-
-export interface PowerAnomalyOptions {
-  /** แอร์/อุปกรณ์ควรเปิดอยู่หรือไม่ (ถ้า true แต่กระแส=0 = ดับ) */
-  deviceExpectedOn?: boolean
-  /** กระแสสูงเกิน (A) - แอร์กินไฟผิดปกติ คอมเพรสเซอร์อาจมีปัญหา */
-  currentMax?: number
-  /** กระแสต่ำผิดปกติ (A) */
-  currentMin?: number
-  /** ใช้ค่าจากประวัติถ้าไม่ระบุ currentMax/currentMin */
-  useHistoricalRange?: boolean
-}
-
-/**
- * ตรวจจับความผิดปกติของ Current Sensor
- * - กระแสสูงผิดปกติ → แอร์กินไฟมากเกิน (คอมเพรสเซอร์)
- * - กระแสต่ำผิดปกติ
- * - กระแส = 0 ทั้งที่ควรทำงาน → อุปกรณ์ดับ
- * - ถ้า ENABLE_PYTHON_ML=1 ใช้ Isolation Forest (current, power) ร่วมกับกฎด้านบน
- */
-export function detectPowerAnomaly(
-  currentData: PowerSensorData,
-  historicalData: PowerSensorData[],
-  options: PowerAnomalyOptions = {}
-): PowerAnomalyResult {
-  const current = currentData.readings.current ?? 0
-  const power = currentData.readings.power ?? 0
-  const currents = historicalData.map((d) => d.readings.current ?? 0).filter((c) => c >= 0)
-  const meanCurrent = currents.length > 0 ? mean(currents) : 0
-  const stdCurrent = currents.length > 1 ? standardDeviation(currents, meanCurrent) : 1
-
-  const anomalyTypes: PowerAnomalyResult['anomalyType'] = []
-  let anomalyScore = 0
-  let message = ''
-
-  const deviceExpectedOn = options.deviceExpectedOn ?? false
-  const currentMax = options.currentMax ?? (meanCurrent + 2 * stdCurrent)
-  const currentMin = options.currentMin ?? Math.max(0, meanCurrent - 2 * stdCurrent)
-
-  // กระแส = 0 ทั้งที่ควรทำงาน → อุปกรณ์ดับ
-  if (deviceExpectedOn && current < 0.01) {
-    anomalyTypes.push('device_off_expected')
-    anomalyScore = Math.max(anomalyScore, 0.95)
-    message = th.power.deviceOff
-  }
-
-  // กระแสสูงผิดปกติ → แอร์กินไฟมากเกิน
-  if (currentMax > 0 && current > currentMax) {
-    anomalyTypes.push('current_high')
-    const severity = (current - currentMax) / (stdCurrent || 1)
-    anomalyScore = Math.max(anomalyScore, Math.min(1, 0.6 + severity * 0.1))
-    if (!message) message = th.power.currentHigh(current)
-  }
-
-  // กระแสต่ำผิดปกติ (และไม่ใช่กรณีดับ)
-  if (currentMin >= 0 && current > 0.01 && current < currentMin) {
-    anomalyTypes.push('current_low')
-    anomalyScore = Math.max(anomalyScore, 0.5)
-    if (!message) message = th.power.currentLow(current)
-  }
-
-  // Isolation Forest สำหรับ power sensor (current, power) เมื่อเปิด Python ML
-  let ifScore = 0.5
-  const ifWindowSize = Math.min(120, historicalData.length + 1)
-  const ifData: number[][] = []
-  for (let i = Math.max(0, historicalData.length - ifWindowSize + 1); i < historicalData.length; i++) {
-    const d = historicalData[i]
-    ifData.push([d.readings.current ?? 0, d.readings.power ?? 0])
-  }
-  ifData.push([current, power])
-  if (ENABLE_PYTHON_ML && ifData.length >= 10) {
-    try {
-      const pyOut = runIsolationForestSync({
-        data: ifData,
-        contamination: ML_CONFIG.anomaly.isolationForestContamination,
-        feature_set: 'power',
-      })
-      ifScore = pyOut.scores[pyOut.scores.length - 1] ?? 0.5
-      if (ifScore >= 0.6 && anomalyTypes.length === 0) {
-        anomalyTypes.push('statistical_outlier')
-        if (!message) message = th.power.ifAnomaly
-      }
-      anomalyScore = Math.max(anomalyScore, ifScore)
-    } catch {
-      // fallback: ใช้เฉพาะกฎด้านบน
-    }
-  }
-
-  if (!message) message = anomalyTypes.length > 0 ? th.power.anomalyGeneric : th.power.normal
-
-  const finalScore =
-    typeof anomalyScore === 'number' && !Number.isNaN(anomalyScore)
-      ? Math.max(0, Math.min(1, anomalyScore))
-      : 0.5
-
-  return {
-    nodeId: currentData.nodeId,
-    roomId: currentData.roomId,
-    timestamp: currentData.timestamp,
-    isAnomaly: anomalyTypes.length > 0,
-    anomalyScore: finalScore,
-    anomalyType: anomalyTypes,
-    message,
-    current,
-    power,
-    expectedRange: { min: currentMin, max: currentMax },
-    deviceExpectedOn,
-  }
-}
+// Power anomaly detection is now in lib/ml/power-anomaly.ts
+// Re-exported at top of this file via: export { detectPowerAnomaly, type PowerAnomalyOptions } from './ml/power-anomaly'

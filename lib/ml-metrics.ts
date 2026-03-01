@@ -3,11 +3,7 @@
  * ใช้ประเมินผลการพยากรณ์ (Actual vs Predicted)
  */
 
-export interface PredictionMetrics {
-  mae: number
-  rmse: number
-  mape: number
-}
+import type { PredictionMetrics } from './types'
 
 /**
  * Mean Absolute Error

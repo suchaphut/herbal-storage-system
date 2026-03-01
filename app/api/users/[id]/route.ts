@@ -84,7 +84,14 @@ export async function PUT(
     if (!session.permissions.canManageUsers) {
       const updates: Partial<typeof user> = {}
       if (name) updates.name = name
-      if (notificationPreferences) updates.notificationPreferences = notificationPreferences
+      if (notificationPreferences) {
+        updates.notificationPreferences = {
+          ...user.notificationPreferences,
+          ...notificationPreferences,
+          discordWebhookUrl: notificationPreferences.discordWebhookUrl ?? user.notificationPreferences.discordWebhookUrl,
+          lineAccessToken: notificationPreferences.lineAccessToken ?? user.notificationPreferences.lineAccessToken,
+        }
+      }
 
       const updatedUser = await db.updateUser(id, updates)
 
@@ -138,7 +145,12 @@ export async function PUT(
       updates.assignedRooms = assignedRooms
     }
     if (notificationPreferences) {
-      updates.notificationPreferences = notificationPreferences
+      updates.notificationPreferences = {
+        ...user.notificationPreferences,
+        ...notificationPreferences,
+        discordWebhookUrl: notificationPreferences.discordWebhookUrl ?? user.notificationPreferences.discordWebhookUrl,
+        lineAccessToken: notificationPreferences.lineAccessToken ?? user.notificationPreferences.lineAccessToken,
+      }
     }
     if (typeof isActive === 'boolean') {
       // Prevent admin from deactivating themselves

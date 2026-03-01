@@ -16,7 +16,9 @@ const UserSchema = new Schema({
   assignedRooms: [{ type: String }],
   notificationPreferences: {
     discord: { type: Boolean, default: false },
+    discordWebhookUrl: { type: String, default: '' },
     line: { type: Boolean, default: false },
+    lineAccessToken: { type: String, default: '' },
     email: { type: Boolean, default: true }
   },
   lastLogin: { type: Date, default: null },
@@ -42,6 +44,33 @@ const RoomSchema = new Schema({
       min: { type: Number, default: 40 },
       max: { type: Number, default: 60 }
     }
+  },
+  notifications: {
+    discord: {
+      enabled: { type: Boolean, default: false },
+      webhookUrl: { type: String, default: '' },
+    },
+    line: {
+      enabled: { type: Boolean, default: false },
+      accessToken: { type: String, default: '' },
+    },
+    alertOnThreshold: { type: Boolean, default: true },
+    alertOnAnomaly: { type: Boolean, default: true },
+    alertOnOffline: { type: Boolean, default: true },
+  },
+  externalWeather: {
+    enabled: { type: Boolean, default: false },
+    location: { type: String, default: 'ปราจีนบุรี' },
+    coordinates: {
+      lat: { type: Number, default: 14.0583 },
+      lon: { type: Number, default: 101.3711 }
+    }
+  },
+  acOptimization: {
+    enabled: { type: Boolean, default: false },
+    autoAdjust: { type: Boolean, default: false },
+    energySavingMode: { type: Boolean, default: true },
+    targetEfficiency: { type: Number, default: 80 }
   },
   isActive: { type: Boolean, default: true }
 }, { timestamps: true })
@@ -79,7 +108,7 @@ const SensorNodeSchema = new Schema({
 const SensorDataSchema = new Schema({
   nodeId: { type: String, required: true, index: true },
   roomId: { type: Schema.Types.ObjectId, ref: 'Room', index: true },
-  timestamp: { type: Date, default: Date.now, index: true },
+  timestamp: { type: Date, default: Date.now },
   type: { type: String, required: true },
   readings: {
     // Environmental
@@ -94,8 +123,10 @@ const SensorDataSchema = new Schema({
 }, { timestamps: false })
 
 SensorDataSchema.index({ roomId: 1, timestamp: -1 })
+SensorDataSchema.index({ roomId: 1, type: 1, timestamp: -1 })
 SensorDataSchema.index({ nodeId: 1, timestamp: -1 })
 SensorDataSchema.index({ type: 1, nodeId: 1, timestamp: -1 })
+SensorDataSchema.index({ timestamp: 1 }, { expireAfterSeconds: 90 * 24 * 3600 }) // Auto-delete after 90 days
 
 /**
  * 5. Alerts Collection
@@ -110,7 +141,8 @@ const AlertSchema = new Schema({
   data: {
     value: Number,
     threshold: Number,
-    anomalyScore: Number
+    anomalyScore: Number,
+    source: { type: String, enum: ['threshold', 'ml_environmental', 'ml_power'], default: null }
   },
   isResolved: { type: Boolean, default: false },
   resolvedAt: { type: Date },
@@ -177,6 +209,36 @@ const AuditLogSchema = new Schema({
 }, { timestamps: true })
 
 AuditLogSchema.index({ createdAt: -1 })
+AuditLogSchema.index({ createdAt: 1 }, { expireAfterSeconds: 365 * 24 * 3600 }) // Auto-delete after 1 year
 AuditLogSchema.index({ userId: 1, createdAt: -1 })
 
 export const AuditLogModel = mongoose.models.AuditLog || mongoose.model('AuditLog', AuditLogSchema)
+
+/**
+ * 7. External Weather Data Collection
+ * เก็บข้อมูลอากาศภายนอกจาก OpenWeatherMap / TMD
+ */
+const ExternalWeatherDataSchema = new Schema({
+  location: { type: String, required: true, index: true },
+  timestamp: { type: Date, required: true },
+  temperature: { type: Number, required: true },
+  humidity: { type: Number, required: true },
+  pressure: { type: Number, required: true },
+  feelsLike: { type: Number },
+  weatherCondition: { type: String },
+  weatherMain: { type: String },
+  windSpeed: { type: Number },
+  cloudiness: { type: Number },
+  source: { type: String, enum: ['TMD', 'OpenWeatherMap'], required: true },
+  coordinates: {
+    lat: { type: Number },
+    lon: { type: Number }
+  }
+}, { timestamps: false })
+
+ExternalWeatherDataSchema.index({ location: 1, timestamp: -1 })
+ExternalWeatherDataSchema.index({ timestamp: 1 }, { expireAfterSeconds: 30 * 24 * 3600 }) // Auto-delete after 30 days
+
+export const ExternalWeatherDataModel = 
+  mongoose.models.ExternalWeatherData || 
+  mongoose.model('ExternalWeatherData', ExternalWeatherDataSchema)

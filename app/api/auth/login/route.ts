@@ -188,7 +188,7 @@ export async function POST(request: NextRequest) {
       httpOnly: true,
       secure: process.env.NODE_ENV === 'production',
       sameSite: 'lax',
-      maxAge: 7 * 24 * 60 * 60, // 7 days
+      maxAge: 24 * 60 * 60, // 24 hours (ตรงกับ JWT_EXPIRES_IN ใน auth-service)
       path: '/',
     })
 

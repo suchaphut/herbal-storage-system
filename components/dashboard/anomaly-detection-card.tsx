@@ -73,7 +73,7 @@ export function AnomalyDetectionCard({
             {anomaly.isAnomaly ? severityLabel : 'ปกติ'}
           </Badge>
         </div>
-        <CardDescription>Isolation Forest + Z-Score • คะแนนความผิดปกติ</CardDescription>
+        <CardDescription>{anomaly.modelName || 'Isolation Forest + Z-Score'} • คะแนนความผิดปกติ</CardDescription>
       </CardHeader>
       <CardContent className="space-y-4">
         {/* Anomaly Score */}

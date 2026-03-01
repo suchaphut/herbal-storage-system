@@ -3,6 +3,7 @@ import dbConnect from './mongodb'
 import { RoomModel, SensorNodeModel, SensorDataModel, AlertModel, UserModel, MLModelMetricsModel } from './models'
 import type {
   Room,
+  RoomNotificationSettings,
   SensorNode,
   SensorData,
   Alert,
@@ -79,6 +80,18 @@ export const dbService = {
       .lean()
   },
 
+  async getSensorDataByRoomAndType(roomId: string, type: string, limit = 288): Promise<SensorData[]> {
+    await dbConnect()
+    const queryRoomId =
+      roomId && mongoose.Types.ObjectId.isValid(roomId)
+        ? new mongoose.Types.ObjectId(roomId)
+        : roomId
+    return await SensorDataModel.find({ roomId: queryRoomId, type })
+      .sort({ timestamp: -1 })
+      .limit(limit)
+      .lean()
+  },
+
   async getSensorDataHistory(opts: {
     roomId?: string
     nodeId?: string
@@ -105,10 +118,14 @@ export const dbService = {
   },
 
   // Alerts
-  async getAlerts(resolved?: boolean): Promise<Alert[]> {
+  async getAlerts(resolved?: boolean, limit?: number): Promise<Alert[]> {
     await dbConnect()
     const filter = resolved !== undefined ? { isResolved: resolved } : {}
-    const alerts = await AlertModel.find(filter).sort({ createdAt: -1 }).limit(50).lean()
+    const query = AlertModel.find(filter).sort({ createdAt: -1 })
+    // Resolved history: default 20. Unresolved: default 200 to prevent OOM on large datasets.
+    const effectiveLimit = limit ?? (resolved === true ? 20 : 200)
+    query.limit(effectiveLimit)
+    const alerts = await query.lean()
     return alerts.map((a: Record<string, unknown>) => ({
       ...a,
       _id: String(a._id),
@@ -138,7 +155,8 @@ export const dbService = {
       isResolved: false,
     }
     if (messagePrefix) {
-      filter.message = { $regex: `^${messagePrefix}` }
+      const escaped = messagePrefix.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+      filter.message = { $regex: `^${escaped}` }
     }
     const count = await AlertModel.countDocuments(filter)
     return count > 0
@@ -147,7 +165,8 @@ export const dbService = {
   async createAlert(alert: Omit<Alert, '_id' | 'createdAt'>): Promise<Alert> {
     await dbConnect()
     const saved = await AlertModel.create(alert)
-    return saved.toObject()
+    const obj = saved.toObject() as Record<string, unknown>
+    return { ...obj, _id: String(obj._id), roomId: obj.roomId ? String(obj.roomId) : null } as Alert
   },
 
   async resolveAllAlerts(resolvedBy: string): Promise<number> {
@@ -159,13 +178,57 @@ export const dbService = {
     return result.modifiedCount
   },
 
+  async resolveAllAlertsForRooms(resolvedBy: string, roomIds: string[]): Promise<number> {
+    await dbConnect()
+    const objectIds = roomIds
+      .filter((id) => mongoose.Types.ObjectId.isValid(id))
+      .map((id) => new mongoose.Types.ObjectId(id))
+    const result = await AlertModel.updateMany(
+      { isResolved: false, roomId: { $in: objectIds } },
+      { isResolved: true, resolvedAt: new Date(), resolvedBy }
+    )
+    return result.modifiedCount
+  },
+
+  /** อัปเดต alert ที่มีอยู่ (เช่น เปลี่ยน severity/message/data เมื่อ anomaly score เปลี่ยน) */
+  async updateAlert(id: string, updates: Partial<Pick<Alert, 'severity' | 'message' | 'data'>>): Promise<Alert | null> {
+    await dbConnect()
+    const a = await AlertModel.findByIdAndUpdate(id, updates, { new: true }).lean() as Record<string, unknown> | null
+    if (!a) return null
+    return { ...a, _id: String(a._id), roomId: a.roomId ? String(a.roomId) : null } as Alert
+  },
+
   async resolveAlert(id: string, resolvedBy: string): Promise<Alert | null> {
     await dbConnect()
-    return await AlertModel.findByIdAndUpdate(
+    const a = await AlertModel.findByIdAndUpdate(
       id,
       { isResolved: true, resolvedAt: new Date(), resolvedBy },
       { new: true }
-    ).lean()
+    ).lean() as Record<string, unknown> | null
+    if (!a) return null
+    return { ...a, _id: String(a._id), roomId: a.roomId ? String(a.roomId) : null } as Alert
+  },
+
+  /** ยกเลิกการแจ้งเตือน offline ของเซ็นเซอร์ในห้อง/โหนดนี้เมื่อกลับมาออนไลน์ (ระบบยกเลิกอัตโนมัติ) */
+  async resolveOfflineAlertsForNode(
+    roomId: string,
+    nodeId: string,
+    resolvedBy: string = 'system'
+  ): Promise<number> {
+    await dbConnect()
+    const queryRoomId = mongoose.Types.ObjectId.isValid(roomId)
+      ? new mongoose.Types.ObjectId(roomId)
+      : roomId
+    const result = await AlertModel.updateMany(
+      {
+        roomId: queryRoomId,
+        nodeId,
+        type: 'offline',
+        isResolved: false,
+      },
+      { isResolved: true, resolvedAt: new Date(), resolvedBy }
+    )
+    return result.modifiedCount
   },
 
   /** ยกเลิกการแจ้งเตือน anomaly ของ power sensor ในห้อง/โหนดนี้เมื่อกระแสกลับปกติ (ระบบยกเลิกอัตโนมัติ) */
@@ -175,9 +238,12 @@ export const dbService = {
     resolvedBy: string = 'system'
   ): Promise<number> {
     await dbConnect()
+    const queryRoomId = mongoose.Types.ObjectId.isValid(roomId)
+      ? new mongoose.Types.ObjectId(roomId)
+      : roomId
     const result = await AlertModel.updateMany(
       {
-        roomId: new mongoose.Types.ObjectId(roomId),
+        roomId: queryRoomId,
         nodeId,
         type: 'anomaly',
         isResolved: false,
@@ -201,8 +267,20 @@ export const dbService = {
 
   async deleteRoom(id: string): Promise<boolean> {
     await dbConnect()
-    const result = await RoomModel.findByIdAndDelete(id)
+    const result = await RoomModel.findByIdAndUpdate(id, { isActive: false }, { new: true })
     return !!result
+  },
+
+  async updateRoomNotifications(
+    id: string,
+    notifications: RoomNotificationSettings
+  ): Promise<Room | null> {
+    await dbConnect()
+    return await RoomModel.findByIdAndUpdate(
+      id,
+      { notifications },
+      { new: true }
+    ).lean()
   },
 
   // Additional Sensor Methods
@@ -219,7 +297,7 @@ export const dbService = {
 
   async deleteSensorNode(id: string): Promise<boolean> {
     await dbConnect()
-    const result = await SensorNodeModel.findByIdAndDelete(id)
+    const result = await SensorNodeModel.findByIdAndUpdate(id, { isActive: false }, { new: true })
     return !!result
   },
 

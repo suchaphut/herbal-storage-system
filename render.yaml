@@ -1,0 +1,42 @@
+# ──────────────────────────────────────────────────────────────────────────────
+# Render Blueprint — IoT Herbal Storage Monitoring System
+# Docs: https://docs.render.com/blueprint-spec
+# ──────────────────────────────────────────────────────────────────────────────
+
+services:
+  - type: web
+    name: herbal-storage-system
+    runtime: docker                 # ใช้ Docker เพื่อรองรับ Node.js + Python ML
+    plan: free                      # เปลี่ยนเป็น starter / standard ตามต้องการ
+    dockerfilePath: ./Dockerfile
+    dockerContext: .
+    envVars:
+      # ─── Required ───────────────────────────────────────────────────────
+      - key: MONGODB_URI
+        sync: false                 # ต้องตั้งค่าเองใน Render Dashboard
+      - key: JWT_SECRET
+        generateValue: true         # Render จะ generate random secret ให้
+      - key: SENSOR_API_KEY
+        sync: false
+      # ─── Python ML (เปิดเต็ม) ───────────────────────────────────────────
+      - key: ENABLE_PYTHON_ML
+        value: "1"
+      - key: USE_ENSEMBLE_ANOMALY
+        value: "1"
+      - key: PYTHON_PATH
+        value: python3
+      - key: ML_CACHE_TTL_MS
+        value: "300000"
+      # ─── Optional: Notifications ─────────────────────────────────────────
+      - key: DISCORD_WEBHOOK_URL
+        sync: false
+      - key: LINE_NOTIFY_TOKEN
+        sync: false
+      # ─── Optional: Weather ───────────────────────────────────────────────
+      - key: OPENWEATHER_API_KEY
+        sync: false
+      # ─── Node / Next.js ─────────────────────────────────────────────────
+      - key: NODE_ENV
+        value: production
+      - key: PORT
+        value: "3000"

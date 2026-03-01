@@ -1,7 +1,28 @@
 import { NextRequest, NextResponse } from 'next/server'
+import { z } from 'zod'
 import { dbService as db } from '@/lib/db-service'
 import { requireRoomAccess, requirePermission } from '@/lib/auth-middleware'
 import { auditLogService, getClientInfo } from '@/lib/audit-log-service'
+
+// ─── Zod schema for room update validation ──────────────────────────────────
+
+const UpdateRoomSchema = z.object({
+  name: z.string().min(1).max(200).optional(),
+  description: z.string().max(500).optional(),
+  location: z.string().max(200).optional(),
+  thresholds: z.object({
+    temperature: z.object({ min: z.number(), max: z.number() }),
+    humidity: z.object({ min: z.number(), max: z.number() }),
+  }).optional(),
+  notifications: z.object({
+    discord: z.object({ enabled: z.boolean(), webhookUrl: z.string() }),
+    line: z.object({ enabled: z.boolean(), accessToken: z.string() }),
+    alertOnThreshold: z.boolean(),
+    alertOnAnomaly: z.boolean(),
+    alertOnOffline: z.boolean(),
+  }).optional(),
+  isActive: z.boolean().optional(),
+}).strict()
 
 // GET /api/rooms/[id] - Get room details
 export async function GET(
@@ -30,9 +51,9 @@ export async function GET(
     }
 
     const nodes = await db.getSensorNodesByRoom(id)
-    const rawData = await db.getSensorDataByRoom(id, 200)
+    const rawData = await db.getSensorDataByRoomAndType(id, 'environmental', 200)
     const sensorData = (rawData || [])
-      .filter((d) => d.type === 'environmental' && d.readings && 'temperature' in d.readings)
+      .filter((d) => d.readings && 'temperature' in d.readings)
       .map((d) => ({
         _id: String(d._id),
         nodeId: d.nodeId,
@@ -80,6 +101,19 @@ export async function PUT(
 
     const body = await request.json()
 
+    // Validate request body
+    const parsed = UpdateRoomSchema.safeParse(body)
+    if (!parsed.success) {
+      return NextResponse.json(
+        {
+          success: false,
+          error: 'ข้อมูลไม่ถูกต้อง',
+          details: parsed.error.flatten().fieldErrors,
+        },
+        { status: 400 }
+      )
+    }
+
     // Get original room for logging
     const originalRoom = await db.getRoomById(id)
     if (!originalRoom) {
@@ -89,7 +123,7 @@ export async function PUT(
       )
     }
 
-    const updated = await db.updateRoom(id, body)
+    const updated = await db.updateRoom(id, parsed.data)
 
     if (!updated) {
       return NextResponse.json(

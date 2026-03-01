@@ -127,6 +127,15 @@ export const th = {
     expectedHumidity: (expected: number) => `คาดหวัง: ${expected.toFixed(0)}%`,
   },
 
+  // ─── Sensor offline / heartbeat messages ─────────────────────────────────────
+  offline: {
+    alertMessage: (nodeName: string, nodeId: string, roomName: string, offlineMinutes: number) =>
+      `เซ็นเซอร์ "${nodeName}" (${nodeId}) ในห้อง "${roomName}" หยุดส่งข้อมูลเป็นเวลา ${offlineMinutes} นาทีแล้ว กรุณาตรวจสอบการเชื่อมต่อ WiFi หรืออุปกรณ์ Sensor Node อาจชำรุด`,
+    alertMessageNoRoom: (nodeName: string, nodeId: string, offlineMinutes: number) =>
+      `เซ็นเซอร์ "${nodeName}" (${nodeId}) หยุดส่งข้อมูลเป็นเวลา ${offlineMinutes} นาทีแล้ว กรุณาตรวจสอบการเชื่อมต่อ WiFi หรืออุปกรณ์ Sensor Node อาจชำรุด`,
+    recommendation: 'กรุณาตรวจสอบ:\n1. การเชื่อมต่อ WiFi ของอุปกรณ์\n2. สถานะไฟเลี้ยงของ Sensor Node\n3. อุปกรณ์ Sensor Node อาจชำรุดหรือต้องรีสตาร์ท',
+  },
+
   // ─── API / ingest messages ────────────────────────────────────────────────────
   api: {
     ingestHint: 'ส่ง POST กับ body: { nodeId, type, readings }',

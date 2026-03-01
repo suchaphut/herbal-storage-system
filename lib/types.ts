@@ -2,6 +2,20 @@
 
 export type SensorNodeType = 'environmental' | 'power'
 
+export interface RoomNotificationSettings {
+  discord: {
+    enabled: boolean
+    webhookUrl: string
+  }
+  line: {
+    enabled: boolean
+    accessToken: string
+  }
+  alertOnThreshold: boolean
+  alertOnAnomaly: boolean
+  alertOnOffline: boolean
+}
+
 export interface Room {
   _id: string
   name: string
@@ -10,6 +24,21 @@ export interface Room {
   thresholds: {
     temperature: { min: number; max: number }
     humidity: { min: number; max: number }
+  }
+  notifications: RoomNotificationSettings
+  externalWeather?: {
+    enabled: boolean
+    location: string // e.g., "ปราจีนบุรี"
+    coordinates?: {
+      lat: number
+      lon: number
+    }
+  }
+  acOptimization?: {
+    enabled: boolean
+    autoAdjust: boolean // true = ปรับอัตโนมัติ, false = แค่แนะนำ
+    energySavingMode: boolean
+    targetEfficiency: number // 0-100 (%)
   }
   createdAt: Date
   updatedAt: Date
@@ -63,6 +92,25 @@ export interface PowerSensorData extends BaseSensorData {
 }
 
 export type SensorData = EnvironmentalSensorData | PowerSensorData
+
+// External Weather Data (from Thai Meteorological Department / OpenWeatherMap)
+export interface ExternalWeatherData {
+  location: string // e.g., "ปราจีนบุรี"
+  timestamp: Date
+  temperature: number // Celsius
+  humidity: number // Percentage
+  pressure: number // hPa
+  feelsLike?: number // Celsius
+  weatherCondition: string // e.g., "ท้องฟ้าแจ่มใส", "ฝนตก"
+  weatherMain: string // e.g., "Clear", "Rain", "Clouds"
+  windSpeed?: number // m/s
+  cloudiness?: number // Percentage
+  source: 'TMD' | 'OpenWeatherMap'
+  coordinates?: {
+    lat: number
+    lon: number
+  }
+}
 
 // User Role Type
 export type UserRole = 'admin' | 'operator' | 'viewer'
@@ -167,7 +215,9 @@ export interface User {
   assignedRooms: string[] // For Operator role - room IDs they can manage
   notificationPreferences: {
     discord: boolean
+    discordWebhookUrl: string
     line: boolean
+    lineAccessToken: string
     email: boolean
   }
   lastLogin: Date | null
@@ -187,7 +237,9 @@ export interface SafeUser {
   assignedRooms: string[]
   notificationPreferences: {
     discord: boolean
+    hasDiscordWebhook: boolean  // true if webhook URL is configured (URL itself is not sent to client)
     line: boolean
+    hasLineToken: boolean       // true if LINE token is configured (token itself is not sent to client)
     email: boolean
   }
   lastLogin: Date | null
@@ -236,7 +288,9 @@ export interface UpdateUserRequest {
   assignedRooms?: string[]
   notificationPreferences?: {
     discord: boolean
+    discordWebhookUrl?: string
     line: boolean
+    lineAccessToken?: string
     email: boolean
   }
   isActive?: boolean
@@ -261,6 +315,9 @@ export interface Alert {
     value?: number
     threshold?: number
     anomalyScore?: number
+    source?: 'threshold' | 'ml_environmental' | 'ml_power'
+    lastSeen?: Date | string | null
+    offlineMinutes?: number
   }
   isResolved: boolean
   resolvedAt: Date | null
@@ -408,6 +465,8 @@ export interface AnomalyDetectionResult {
     temperature: { min: number; max: number }
     humidity: { min: number; max: number }
   }
+  /** ชื่อโมเดลที่ใช้ตรวจจับ anomaly เช่น 'Isolation Forest + Z-Score' หรือ 'Ensemble (IF+LSTM+SVM) + Z-Score' */
+  modelName?: string
 }
 
 export type AnomalyType =
@@ -541,4 +600,84 @@ export interface TimeSeriesPoint {
   minHumidity: number
   maxHumidity: number
   count: number
+}
+
+// Climate Analysis (Inside vs Outside)
+export interface ClimateAnalysis {
+  roomId: string
+  timestamp: Date
+  inside: {
+    temperature: number
+    humidity: number
+  }
+  outside: {
+    temperature: number
+    humidity: number
+    weatherCondition: string
+  }
+  delta: {
+    temperature: number // inside - outside
+    humidity: number
+  }
+  heatLoad: number // Estimated heat load (W/m²)
+  efficiency: number // AC efficiency score (0-100)
+  recommendation: string
+  // ML-enhanced fields (optional — present when ENABLE_PYTHON_ML=1)
+  mlPrediction?: {
+    predictedIndoorTemp6h: number
+    predictedIndoorHumidity6h: number
+    trend: 'warming' | 'cooling' | 'stable'
+    confidence: number // 0-1
+    usesExternalWeather: boolean
+  }
+  mlModel?: {
+    name: string
+    version: string
+    mae?: number
+    rmse?: number
+    mape?: number
+    trainingPoints?: number
+  }
+}
+
+// AC Optimization Recommendation
+export interface ACRecommendation {
+  roomId: string
+  timestamp: Date
+  currentStatus: {
+    temperature: number
+    humidity: number
+    acPower: number // Current AC power consumption (W)
+    acRunning: boolean
+  }
+  externalConditions: {
+    temperature: number
+    humidity: number
+    weatherCondition: string
+  }
+  recommendation: {
+    action: 'increase' | 'decrease' | 'maintain' | 'turn_off' | 'turn_on'
+    targetTemperature?: number
+    reason: string
+    energySavingPotential: number // Percentage
+    priority: 'low' | 'medium' | 'high'
+  }
+  forecast: {
+    nextHourTrend: 'warming' | 'cooling' | 'stable'
+    suggestedPreemptiveAction?: string
+  }
+  generatedAt: Date
+  // ML-enhanced fields (optional — present when RL model is trained)
+  rlRecommendation?: {
+    action: string
+    confidence: number // 0-1
+    qValues?: Record<string, number>
+    energySavingPotential?: number
+    totalEpisodes?: number
+  }
+  mlModel?: {
+    name: string
+    totalEpisodes: number
+    thermalModelMAE?: number | null
+  }
 }

@@ -63,6 +63,13 @@ export async function POST(request: NextRequest) {
       description: description || '',
       location: location || '',
       thresholds,
+      notifications: {
+        discord: { enabled: false, webhookUrl: '' },
+        line: { enabled: false, accessToken: '' },
+        alertOnThreshold: true,
+        alertOnAnomaly: true,
+        alertOnOffline: true,
+      },
       isActive: true,
     })
 

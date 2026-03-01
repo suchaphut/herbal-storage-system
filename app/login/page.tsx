@@ -103,14 +103,16 @@ export default function LoginPage() {
               </Button>
             </form>
 
-            <div className="mt-6 space-y-2 rounded-lg bg-slate-700/30 p-4 text-sm text-slate-300">
-              <p className="font-medium text-slate-200">Demo Accounts:</p>
-              <div className="space-y-1 text-xs">
-                <p>👨‍💼 Admin: admin@herbal.local / admin123</p>
-                <p>👨‍🔧 Operator: operator@herbal.local / operator123</p>
-                <p>👁️ Viewer: viewer@herbal.local / viewer123</p>
+            {process.env.NODE_ENV !== 'production' && (
+              <div className="mt-6 space-y-2 rounded-lg bg-slate-700/30 p-4 text-sm text-slate-300">
+                <p className="font-medium text-slate-200">Demo Accounts:</p>
+                <div className="space-y-1 text-xs">
+                  <p>Admin: admin@herbal.local / admin123</p>
+                  <p>Operator: operator@herbal.local / operator123</p>
+                  <p>Viewer: viewer@herbal.local / viewer123</p>
+                </div>
               </div>
-            </div>
+            )}
           </CardContent>
         </Card>
       </div>

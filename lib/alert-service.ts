@@ -10,11 +10,13 @@
 
 import { dbService as db } from './db-service'
 import { detectAnomaly, detectPowerAnomaly } from './ml-service'
+import { sendNotificationToRoomUsers } from './notification-service'
 import { th } from './i18n'
 import type {
   EnvironmentalSensorData,
   PowerSensorData,
   SensorData,
+  SensorNode,
   Room,
 } from './types'
 
@@ -27,13 +29,15 @@ const ANOMALY_DEBOUNCE_MS = 5 * 60 * 1000 // 5 minutes
 
 /**
  * Returns true if enough time has passed since the last anomaly detection run
- * for this node, and records the current time if so.
+ * for this node+type, and records the current time if so.
+ * Key includes sensor type to prevent cross-type debounce collision.
  */
-function shouldRunAnomalyDetection(nodeId: string): boolean {
+function shouldRunAnomalyDetection(nodeId: string, sensorType: string): boolean {
+  const key = `${nodeId}:${sensorType}`
   const now = Date.now()
-  const last = lastAnomalyRunMs.get(nodeId) ?? 0
+  const last = lastAnomalyRunMs.get(key) ?? 0
   if (now - last < ANOMALY_DEBOUNCE_MS) return false
-  lastAnomalyRunMs.set(nodeId, now)
+  lastAnomalyRunMs.set(key, now)
   return true
 }
 
@@ -47,7 +51,8 @@ export async function checkEnvironmentalThresholds(
   nodeId: string,
   roomId: string,
   readings: EnvironmentalSensorData['readings'],
-  thresholds: Room['thresholds']
+  thresholds: Room['thresholds'],
+  room?: Room | null
 ): Promise<void> {
   const { temperature, humidity } = readings
 
@@ -58,7 +63,7 @@ export async function checkEnvironmentalThresholds(
       const isCritical =
         temperature > thresholds.temperature.max + 5 ||
         temperature < thresholds.temperature.min - 5
-      await db.createAlert({
+      const alert = await db.createAlert({
         roomId,
         nodeId,
         type: 'threshold',
@@ -69,11 +74,18 @@ export async function checkEnvironmentalThresholds(
         data: {
           value: temperature,
           threshold: isHigh ? thresholds.temperature.max : thresholds.temperature.min,
+          source: 'threshold',
         },
         isResolved: false,
         resolvedAt: null,
         resolvedBy: null,
       })
+      db.getAllUsers().then(async (users) => {
+        const node = await db.getSensorNodeByNodeId(nodeId).catch(() => null)
+        return sendNotificationToRoomUsers(users, roomId, alert, room, node)
+      }).catch((err) =>
+        console.error('[AlertService] Failed to send threshold notification:', err)
+      )
     }
   }
 
@@ -84,7 +96,7 @@ export async function checkEnvironmentalThresholds(
       const isCritical =
         humidity > thresholds.humidity.max + 10 ||
         humidity < thresholds.humidity.min - 10
-      await db.createAlert({
+      const alert = await db.createAlert({
         roomId,
         nodeId,
         type: 'threshold',
@@ -95,11 +107,18 @@ export async function checkEnvironmentalThresholds(
         data: {
           value: humidity,
           threshold: isHigh ? thresholds.humidity.max : thresholds.humidity.min,
+          source: 'threshold',
         },
         isResolved: false,
         resolvedAt: null,
         resolvedBy: null,
       })
+      db.getAllUsers().then(async (users) => {
+        const node = await db.getSensorNodeByNodeId(nodeId).catch(() => null)
+        return sendNotificationToRoomUsers(users, roomId, alert, room, node)
+      }).catch((err) =>
+        console.error('[AlertService] Failed to send threshold notification:', err)
+      )
     }
   }
 }
@@ -114,14 +133,14 @@ export async function checkEnvironmentalThresholds(
 export async function checkEnvironmentalAnomaly(
   saved: SensorData,
   nodeId: string,
-  roomId: string
+  roomId: string,
+  room?: Room | null
 ): Promise<void> {
-  if (!shouldRunAnomalyDetection(nodeId)) return
+  if (!shouldRunAnomalyDetection(nodeId, 'environmental')) return
 
-  const historicalData = await db.getSensorDataByRoom(roomId, 288)
+  const historicalData = await db.getSensorDataByRoomAndType(roomId, 'environmental', 288)
   const nodeHistoricalData = historicalData.filter(
-    (d): d is EnvironmentalSensorData =>
-      d.type === 'environmental' && d.nodeId === nodeId
+    (d): d is EnvironmentalSensorData => (d as EnvironmentalSensorData).nodeId === nodeId
   )
 
   const anomaly = detectAnomaly(saved as EnvironmentalSensorData, nodeHistoricalData)
@@ -133,17 +152,23 @@ export async function checkEnvironmentalAnomaly(
 
   if (anomaly.isAnomaly && !hasActiveAnomalyAlert) {
     const score = safeScore(anomaly.anomalyScore)
-    await db.createAlert({
+    const alert = await db.createAlert({
       roomId,
       nodeId,
       type: 'anomaly',
       severity: score > 0.9 ? 'critical' : 'warning',
-      message: th.alert.anomalyDetected(score * 100),
-      data: { anomalyScore: score },
+      message: `[ML] ${th.alert.anomalyDetected(score * 100)}`,
+      data: { anomalyScore: score, source: 'ml_environmental' },
       isResolved: false,
       resolvedAt: null,
       resolvedBy: null,
     })
+    db.getAllUsers().then(async (users) => {
+      const node = await db.getSensorNodeByNodeId(nodeId).catch(() => null)
+      return sendNotificationToRoomUsers(users, roomId, alert, room, node)
+    }).catch((err) =>
+      console.error('[AlertService] Failed to send anomaly notification:', err)
+    )
   }
 }
 
@@ -158,16 +183,17 @@ export async function checkPowerAnomaly(
   saved: SensorData,
   nodeId: string,
   roomId: string,
-  deviceExpectedOn = false
+  deviceExpectedOn = false,
+  room?: Room | null
 ): Promise<void> {
-  if (!shouldRunAnomalyDetection(nodeId)) return
+  if (!shouldRunAnomalyDetection(nodeId, 'power')) return
 
-  const historicalData = await db.getSensorDataByRoom(roomId, 288)
+  const historicalData = await db.getSensorDataByRoomAndType(roomId, 'power', 288)
   const powerHistory = historicalData.filter(
-    (d): d is PowerSensorData => d.type === 'power' && d.nodeId === nodeId
+    (d): d is PowerSensorData => (d as PowerSensorData).nodeId === nodeId
   )
 
-  const powerAnomaly = detectPowerAnomaly(saved as PowerSensorData, powerHistory, {
+  const powerAnomaly = await detectPowerAnomaly(saved as PowerSensorData, powerHistory, {
     useHistoricalRange: true,
     deviceExpectedOn,
   })
@@ -180,22 +206,135 @@ export async function checkPowerAnomaly(
     const safeScore = (v: number) =>
       typeof v === 'number' && !Number.isNaN(v) ? Math.max(0, Math.min(1, v)) : 0.5
 
-    await db.createAlert({
+    const alert = await db.createAlert({
       roomId,
       nodeId,
       type: 'anomaly',
       severity: safeScore(powerAnomaly.anomalyScore) >= 0.9 ? 'critical' : 'warning',
-      message: powerAnomaly.message,
+      message: `[ML] ${powerAnomaly.message}`,
       data: {
         value: safeNum(powerAnomaly.current),
         threshold: safeNum(powerAnomaly.expectedRange?.max),
         anomalyScore: safeScore(powerAnomaly.anomalyScore),
+        source: 'ml_power',
       },
       isResolved: false,
       resolvedAt: null,
       resolvedBy: null,
     })
+    db.getAllUsers().then(async (users) => {
+      const node = await db.getSensorNodeByNodeId(nodeId).catch(() => null)
+      return sendNotificationToRoomUsers(users, roomId, alert, room, node)
+    }).catch((err) =>
+      console.error('[AlertService] Failed to send power anomaly notification:', err)
+    )
   } else if (!powerAnomaly.isAnomaly) {
     await db.resolvePowerAnomalyAlertsForNode(roomId, nodeId, 'system')
   }
+}
+
+// ─── Sensor heartbeat / offline detection ──────────────────────────────────
+
+/** Default offline threshold: 10 minutes without data */
+const OFFLINE_THRESHOLD_MS = 10 * 60 * 1000
+
+/**
+ * Check all active sensors for heartbeat timeout.
+ * - Marks sensors as offline if lastSeen > OFFLINE_THRESHOLD_MS
+ * - Creates a DB alert (type: 'offline') if none exists
+ * - Sends Discord/LINE notifications to responsible room users
+ * - Auto-resolves offline alerts when sensor comes back online
+ *
+ * Returns summary stats for logging / API response.
+ */
+export async function checkSensorHeartbeat(): Promise<{
+  checkedNodes: number
+  markedOffline: number
+  alertsCreated: number
+  notificationsSent: number
+  autoResolved: number
+}> {
+  const nodes = await db.getSensorNodes()
+  const now = Date.now()
+
+  let markedOffline = 0
+  let alertsCreated = 0
+  let notificationsSent = 0
+  let autoResolved = 0
+
+  // Pre-fetch all users once (for notification fan-out)
+  let allUsers: Awaited<ReturnType<typeof db.getAllUsers>> | null = null
+
+  for (const node of nodes) {
+    if (!node.lastSeen) continue
+
+    const lastSeenMs =
+      node.lastSeen instanceof Date
+        ? node.lastSeen.getTime()
+        : new Date(node.lastSeen).getTime()
+
+    const offlineMinutes = Math.round((now - lastSeenMs) / 60000)
+    const isOverdue = now - lastSeenMs > OFFLINE_THRESHOLD_MS
+
+    // ── Sensor is overdue and was online → mark offline + alert + notify ──
+    if (isOverdue && node.status === 'online') {
+      await db.updateSensorNode(String(node._id), { status: 'offline' })
+      markedOffline++
+
+      const roomId = node.roomId ? String(node.roomId) : null
+      const room = roomId ? await db.getRoomById(roomId) : null
+      const roomName = room?.name ?? 'ไม่ระบุห้อง'
+
+      // Build alert message with room name, node ID, and troubleshooting tips
+      const message = roomId
+        ? th.offline.alertMessage(node.name, node.nodeId, roomName, offlineMinutes)
+        : th.offline.alertMessageNoRoom(node.name, node.nodeId, offlineMinutes)
+
+      // Only create alert if no active offline alert already exists for this node
+      if (roomId) {
+        const hasActive = await db.hasActiveAlertForNode(roomId, node.nodeId, 'offline')
+        if (!hasActive) {
+          const alert = await db.createAlert({
+            roomId,
+            nodeId: node.nodeId,
+            type: 'offline',
+            severity: offlineMinutes >= 30 ? 'critical' : 'warning',
+            message,
+            data: {
+              lastSeen: node.lastSeen,
+              offlineMinutes,
+            },
+            isResolved: false,
+            resolvedAt: null,
+            resolvedBy: null,
+          })
+          alertsCreated++
+
+          // Send notification to responsible room users
+          try {
+            if (!allUsers) allUsers = await db.getAllUsers()
+            await sendNotificationToRoomUsers(allUsers, roomId, alert, room, node as SensorNode)
+            notificationsSent++
+          } catch (err) {
+            console.error('[AlertService] Failed to send offline notification:', err)
+          }
+        }
+      }
+    }
+
+    // ── Sensor is back online → auto-resolve any active offline alerts ──
+    if (!isOverdue && node.status === 'offline') {
+      await db.updateSensorNode(String(node._id), { status: 'online' })
+      if (node.roomId) {
+        const resolved = await db.resolveOfflineAlertsForNode(
+          String(node.roomId),
+          node.nodeId,
+          'system'
+        )
+        autoResolved += resolved
+      }
+    }
+  }
+
+  return { checkedNodes: nodes.length, markedOffline, alertsCreated, notificationsSent, autoResolved }
 }

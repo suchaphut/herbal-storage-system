@@ -81,7 +81,9 @@ export async function POST(request: NextRequest) {
       assignedRooms: role === 'operator' ? assignedRooms : [],
       notificationPreferences: {
         discord: false,
+        discordWebhookUrl: '',
         line: false,
+        lineAccessToken: '',
         email: true,
       },
       lastLogin: null,

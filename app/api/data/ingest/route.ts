@@ -6,8 +6,12 @@ import {
   checkEnvironmentalAnomaly,
   checkPowerAnomaly,
 } from '@/lib/alert-service'
+import { checkRateLimit } from '@/lib/rate-limit'
 import { th } from '@/lib/i18n'
 import type { SensorData } from '@/lib/types'
+
+// Rate limit: 60 requests per minute per nodeId (1 req/sec average)
+const INGEST_RATE_LIMIT = { maxRequests: 60, windowMs: 60 * 1000 }
 
 // ─── Zod schemas for readings validation ─────────────────────────────────────
 
@@ -50,7 +54,13 @@ function verifyApiKey(request: NextRequest): boolean {
 // ─── GET /api/data/ingest ─────────────────────────────────────────────────────
 
 /** GET /api/data/ingest - ใช้ตรวจสอบว่า API ทำงาน และดู nodeId ที่ลงทะเบียนแล้ว */
-export async function GET() {
+export async function GET(request: NextRequest) {
+  if (!verifyApiKey(request)) {
+    return NextResponse.json(
+      { success: false, error: 'Unauthorized: invalid or missing API key' },
+      { status: 401 }
+    )
+  }
   try {
     const nodes = await db.getSensorNodes()
     const nodeIds = nodes.map((n) => ({
@@ -97,6 +107,25 @@ export async function POST(request: NextRequest) {
 
     const { nodeId, type, readings } = parsed.data
 
+    // ─── Rate limiting per nodeId ──────────────────────────────────────────────
+    const rl = checkRateLimit(`ingest:${nodeId}`, INGEST_RATE_LIMIT)
+    if (!rl.allowed) {
+      return NextResponse.json(
+        {
+          success: false,
+          error: `Rate limit exceeded for ${nodeId}. Max ${rl.limit} requests per minute.`,
+        },
+        {
+          status: 429,
+          headers: {
+            'Retry-After': String(Math.ceil(rl.retryAfterMs / 1000)),
+            'X-RateLimit-Limit': String(rl.limit),
+            'X-RateLimit-Remaining': '0',
+          },
+        }
+      )
+    }
+
     const node = await db.getSensorNodeByNodeId(nodeId)
     if (!node) {
       return NextResponse.json(
@@ -120,14 +149,30 @@ export async function POST(request: NextRequest) {
 
     const saved = await db.addSensorData(sensorData)
 
+    // ─── Update sensor status to online + lastSeen ────────────────────────────
+    const wasOffline = node.status === 'offline'
+    db.updateSensorNode(String(node._id), {
+      status: 'online',
+      lastSeen: new Date(),
+    }).catch((err) =>
+      console.error('[Ingest] Failed to update sensor status:', err)
+    )
+
+    // ─── Auto-resolve offline alerts when sensor comes back online ───────────
+    if (wasOffline && node.roomId) {
+      db.resolveOfflineAlertsForNode(String(node.roomId), nodeId, 'system').catch((err) =>
+        console.error('[Ingest] Failed to auto-resolve offline alerts:', err)
+      )
+    }
+
     // ─── Environmental: threshold check + ML anomaly detection ───────────────
     if (type === 'environmental' && node.roomId) {
       const roomId = node.roomId.toString()
       const room = await db.getRoomById(roomId)
       if (room) {
-        await checkEnvironmentalThresholds(nodeId, roomId, readings, room.thresholds)
+        await checkEnvironmentalThresholds(nodeId, roomId, readings, room.thresholds, room)
         // Fire-and-forget: anomaly detection is throttled internally (5 min debounce)
-        checkEnvironmentalAnomaly(saved, nodeId, roomId).catch((err) =>
+        checkEnvironmentalAnomaly(saved, nodeId, roomId, room).catch((err) =>
           console.error('[AlertService] Environmental anomaly check failed:', err)
         )
       }
@@ -136,8 +181,9 @@ export async function POST(request: NextRequest) {
     // ─── Power: ML anomaly detection ─────────────────────────────────────────
     if (type === 'power' && node.roomId) {
       const roomId = node.roomId.toString()
+      const room = await db.getRoomById(roomId)
       // Fire-and-forget: anomaly detection is throttled internally (5 min debounce)
-      checkPowerAnomaly(saved, nodeId, roomId, false).catch((err) =>
+      checkPowerAnomaly(saved, nodeId, roomId, false, room).catch((err) =>
         console.error('[AlertService] Power anomaly check failed:', err)
       )
     }

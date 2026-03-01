@@ -26,34 +26,50 @@ except ImportError:
     # Fallback if running standalone without helper scripts
     ModelManager = None
     
-# Physical Constraints
-TEMP_MIN, TEMP_MAX = 10.0, 40.0
-HUM_MIN, HUM_MAX = 5.0, 98.0
+# Physical Constraints — realistic for herbal storage rooms
+TEMP_MIN, TEMP_MAX = 15.0, 35.0
+HUM_MIN, HUM_MAX = 20.0, 85.0
 CURRENT_MAX = 100.0
 POWER_MAX = 50000.0
 
+# Max allowed deviation from recent mean (prevents wild predictions)
+MAX_TEMP_DEVIATION = 5.0   # °C from recent mean
+MAX_HUM_DEVIATION = 15.0   # % from recent mean
+
 def _get_prophet_model(n_points=None):
-    """Factory for Prophet model with adaptive hyperparameters."""
+    """Factory for Prophet model with conservative hyperparameters."""
     try:
         from prophet import Prophet
     except ImportError:
         return None
     
-    daily_seasonality = True if n_points is None or n_points >= 12 else False
-    weekly_seasonality = True if n_points is None or n_points >= 48 else False
+    # Need at least 2 full days (~96 points at 30min) for daily seasonality
+    daily_seasonality = True if n_points is not None and n_points >= 96 else False
+    # Need at least 2 weeks for weekly seasonality
+    weekly_seasonality = True if n_points is not None and n_points >= 672 else False
     
-    # Adaptive changepoint scale
-    changepoint_scale = 0.05 if n_points is None or n_points < 48 else 0.01
+    # Balanced changepoint scale — allows gentle trend without overfitting
+    if n_points is None or n_points < 48:
+        changepoint_scale = 0.01   # Allow gentle trend for small data
+    elif n_points < 200:
+        changepoint_scale = 0.02   # Moderate for medium data
+    else:
+        changepoint_scale = 0.05   # More flexible for large data
+    
+    # Conservative seasonality scale
+    seasonality_scale = 0.1 if n_points is not None and n_points < 96 else 1.0
     
     return Prophet(
-        interval_width=0.95,
+        interval_width=0.90,
         yearly_seasonality=False,
         daily_seasonality=daily_seasonality,
         weekly_seasonality=weekly_seasonality,
         changepoint_prior_scale=changepoint_scale,
-        seasonality_prior_scale=10.0,
+        seasonality_prior_scale=seasonality_scale,
         seasonality_mode="additive",
-        uncertainty_samples=100
+        changepoint_range=0.8,
+        uncertainty_samples=100,
+        growth='linear'
     )
 
 def _clean_series(series, lower, upper):
@@ -111,27 +127,29 @@ def _fit_predict_ensemble(df, col, steps, freq_minutes, model_manager=None, data
         final_pred = np.full(steps, last_val)
         return final_pred, final_pred, final_pred
 
-    # Case 2: Low data (6-23 points) -> Use Simple Moving Average + Linear Trend
+    # Case 2: Low data (6-23 points) -> Use damped linear trend anchored to recent values
     if n_points < 24:
-        # Simple Linear Regression for Trend
-        x = np.arange(n_points)
         y = train_df['y'].values
+        recent_avg = np.mean(y[-min(5, n_points):])
+        recent_std = np.std(y[-min(5, n_points):]) if n_points >= 3 else 1.0
+        
+        # Damped linear trend: slope decays exponentially into the future
+        x = np.arange(n_points)
         slope, intercept = np.polyfit(x, y, 1)
         
-        # Future x indices
-        future_x = np.arange(n_points, n_points + steps)
-        linear_pred = slope * future_x + intercept
+        # Damping factor: slope effect decays by 50% every `steps/3` steps
+        damping = np.exp(-np.arange(steps) * 0.1)
+        damped_trend = slope * damping * np.arange(1, steps + 1)
         
-        # Weighted with recent average to dampen wild trends
-        recent_avg = train_df['y'].iloc[-3:].mean()
-        final_pred = 0.7 * linear_pred + 0.3 * recent_avg
+        # Anchor prediction to recent average + damped trend
+        final_pred = recent_avg + damped_trend
         
-        # Simple uncertainty bounds (std dev of residuals)
-        residuals = y - (slope * x + intercept)
-        std_err = np.std(residuals) if len(residuals) > 1 else 1.0
+        # Clamp deviation from recent average
+        max_dev = max(recent_std * 2, 2.0)
+        final_pred = np.clip(final_pred, recent_avg - max_dev, recent_avg + max_dev)
         
-        # Expanding cone of uncertainty
-        uncertainty = std_err * np.linspace(1, 2, steps)
+        # Simple uncertainty bounds
+        uncertainty = max(recent_std, 0.5) * np.linspace(1, 2, steps)
         
         return final_pred, final_pred - uncertainty, final_pred + uncertainty
 
@@ -164,23 +182,29 @@ def _fit_predict_ensemble(df, col, steps, freq_minutes, model_manager=None, data
     prophet_lower = fcst["yhat_lower"].iloc[-steps:].values
     prophet_upper = fcst["yhat_upper"].iloc[-steps:].values
     
-    # 2. Simple Moving Average (Baseline)
-    recent_avg = train_df['y'].rolling(window=3).mean().iloc[-1]
-    sma_pred = np.full(steps, recent_avg)
+    # 2. Simple Moving Average with gentle drift toward Prophet direction
+    recent_vals = train_df['y'].iloc[-min(5, n_points):].values
+    recent_avg = np.mean(recent_vals)
+    recent_slope = np.polyfit(np.arange(len(recent_vals)), recent_vals, 1)[0] if len(recent_vals) >= 3 else 0
+    # SMA with gentle linear drift (damped)
+    sma_pred = np.array([recent_avg + recent_slope * min(i, 6) * 0.5 for i in range(steps)])
     
     # 3. Exponential Smoothing (Trend awareness)
     try:
-        exp_pred = exponential_smoothing(train_df['y'].values)[-1]
-        exp_proj = np.full(steps, exp_pred)
+        exp_vals = exponential_smoothing(train_df['y'].values)
+        exp_last = exp_vals[-1]
+        # Project with recent slope (damped)
+        exp_proj = np.array([exp_last + recent_slope * min(i, 6) * 0.3 for i in range(steps)])
     except:
         exp_proj = sma_pred
 
-    # Ensemble Weighting
-    # Trust Prophet more as data grows
+    # Ensemble Weighting — balanced: let Prophet contribute meaningful signal
     if n_points < 48:
-        weights = {'prophet': 0.5, 'sma': 0.3, 'exp': 0.2}
+        weights = {'prophet': 0.45, 'sma': 0.30, 'exp': 0.25}
+    elif n_points < 200:
+        weights = {'prophet': 0.60, 'sma': 0.20, 'exp': 0.20}
     else:
-        weights = {'prophet': 0.8, 'sma': 0.1, 'exp': 0.1}
+        weights = {'prophet': 0.75, 'sma': 0.15, 'exp': 0.10}
 
     final_pred = weighted_ensemble_forecast(
         prophet_pred, 
@@ -189,10 +213,26 @@ def _fit_predict_ensemble(df, col, steps, freq_minutes, model_manager=None, data
         weights
     )
     
+    # --- Post-processing: dampen predictions that deviate too far from recent data ---
+    recent_mean = train_df['y'].iloc[-min(10, n_points):].mean()
+    recent_std = train_df['y'].iloc[-min(10, n_points):].std()
+    max_deviation = max(recent_std * 3, 2.0)  # Allow up to 3 std or 2 units min
+    
+    final_pred = np.clip(final_pred, recent_mean - max_deviation, recent_mean + max_deviation)
+    
+    # Smooth the prediction to reduce jaggedness
+    if len(final_pred) >= 3:
+        kernel = np.array([0.15, 0.7, 0.15])
+        smoothed = np.convolve(final_pred, kernel, mode='same')
+        # Keep first and last values from original
+        smoothed[0] = final_pred[0]
+        smoothed[-1] = final_pred[-1]
+        final_pred = smoothed
+    
     # Adjust bounds based on ensemble shift
     shift = final_pred - prophet_pred
-    final_lower = prophet_lower + shift
-    final_upper = prophet_upper + shift
+    final_lower = np.clip(prophet_lower + shift, recent_mean - max_deviation, recent_mean + max_deviation)
+    final_upper = np.clip(prophet_upper + shift, recent_mean - max_deviation, recent_mean + max_deviation)
     
     return final_pred, final_lower, final_upper
 

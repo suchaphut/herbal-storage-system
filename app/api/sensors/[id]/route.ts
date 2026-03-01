@@ -1,7 +1,22 @@
 import { NextRequest, NextResponse } from 'next/server'
+import { z } from 'zod'
 import { dbService as db } from '@/lib/db-service'
 import { verifyAuth, requireSensorManagement, requirePermission } from '@/lib/auth-middleware'
 import { auditLogService, getClientInfo } from '@/lib/audit-log-service'
+
+// ─── Zod schema for sensor update validation ────────────────────────────────
+
+const UpdateSensorSchema = z.object({
+  name: z.string().min(1).max(200).optional(),
+  type: z.enum(['environmental', 'power']).optional(),
+  roomId: z.string().nullable().optional(),
+  status: z.enum(['online', 'offline', 'warning']).optional(),
+  config: z.object({
+    reportInterval: z.number().min(1),
+    firmware: z.string(),
+  }).optional(),
+  isActive: z.boolean().optional(),
+}).strict()
 
 // GET /api/sensors/[id] - Get sensor details
 export async function GET(
@@ -83,7 +98,21 @@ export async function PUT(
     }
 
     const body = await request.json()
-    const updated = await db.updateSensorNode(id, body)
+
+    // Validate request body
+    const parsed = UpdateSensorSchema.safeParse(body)
+    if (!parsed.success) {
+      return NextResponse.json(
+        {
+          success: false,
+          error: 'ข้อมูลไม่ถูกต้อง',
+          details: parsed.error.flatten().fieldErrors,
+        },
+        { status: 400 }
+      )
+    }
+
+    const updated = await db.updateSensorNode(id, parsed.data)
 
     if (!updated) {
       return NextResponse.json(

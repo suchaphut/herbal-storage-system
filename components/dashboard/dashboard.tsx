@@ -20,6 +20,11 @@ import { UserManagement } from './user-management'
 import { AuditLogViewer } from './audit-log-viewer'
 import { MobileBottomNav } from './mobile-bottom-nav'
 import { SensorDataViewer } from './sensor-data-viewer'
+import { WeatherCard } from './WeatherCard'
+import { ClimateComparisonCard } from './ClimateComparisonCard'
+import { ACRecommendationCard } from './ACRecommendationCard'
+import { Tabs, TabsList, TabsTrigger, TabsContent } from '@/components/ui/tabs'
+import { X } from 'lucide-react'
 import { useAuth } from '@/components/auth/auth-context'
 import type {
   DashboardStats,
@@ -28,10 +33,20 @@ import type {
   Alert,
   EnvironmentalSensorData,
   MLAnalysisResult,
+  ExternalWeatherData,
+  ClimateAnalysis,
+  ACRecommendation,
 } from '@/lib/types'
 
-const fetcher = (url: string) =>
-  fetch(url, { credentials: 'include' }).then((res) => res.json())
+const fetcher = async (url: string) => {
+  const res = await fetch(url, { credentials: 'include' })
+  if (!res.ok) {
+    const body = await res.json().catch(() => ({ error: res.statusText }))
+    const error = new Error(body?.error || `HTTP ${res.status}`)
+    throw error
+  }
+  return res.json()
+}
 
 export function Dashboard() {
   const router = useRouter()
@@ -63,10 +78,17 @@ export function Dashboard() {
     data: SensorNode[]
   }>('/api/sensors', fetcher, { refreshInterval: 30000 })
 
-  const { data: alertsData, mutate: mutateAlerts } = useSWR<{
+  const { data: unresolvedAlertsData, mutate: mutateUnresolved } = useSWR<{
     success: boolean
     data: Alert[]
-  }>('/api/alerts', fetcher, { refreshInterval: 10000 })
+  }>('/api/alerts?resolved=false', fetcher, { refreshInterval: 10000 })
+
+  const { data: resolvedAlertsData, mutate: mutateResolved } = useSWR<{
+    success: boolean
+    data: Alert[]
+  }>('/api/alerts?resolved=true', fetcher, { refreshInterval: 30000 })
+
+  const mutateAlerts = () => { mutateUnresolved(); mutateResolved() }
 
   const { data: selectedRoomData } = useSWR<{
     success: boolean
@@ -79,6 +101,32 @@ export function Dashboard() {
     success: boolean
     data: Record<string, { temperature: number; humidity: number; timestamp: string }>
   }>('/api/data/latest', fetcher, { refreshInterval: 5000 })
+
+  // Weather data (global - Prachin Buri)
+  const { data: weatherData } = useSWR<{
+    success: boolean
+    data: ExternalWeatherData
+  }>('/api/weather/current', fetcher, { refreshInterval: 900000 }) // 15 min
+
+  // Climate analysis (per selected room)
+  const { data: climateData } = useSWR<{
+    success: boolean
+    data: ClimateAnalysis
+  }>(selectedRoomId ? `/api/climate/analyze?roomId=${selectedRoomId}` : null, fetcher, {
+    refreshInterval: 60000,
+  })
+
+  // AC recommendation (per selected room)
+  const { data: acRecommendationData } = useSWR<{
+    success: boolean
+    data: ACRecommendation
+  }>(selectedRoomId ? `/api/recommendations/ac?roomId=${selectedRoomId}` : null, fetcher, {
+    refreshInterval: 60000,
+  })
+
+  const weather = weatherData?.success ? weatherData.data : null
+  const climateAnalysis = climateData?.success ? climateData.data : null
+  const acRecommendation = acRecommendationData?.success ? acRecommendationData.data : null
 
   const { data: mlApiResponse, error: mlFetchError } = useSWR<{
     success?: boolean
@@ -106,8 +154,9 @@ export function Dashboard() {
 
   const rooms = roomsData?.data || []
   const sensors = sensorsData?.data || []
-  const alerts = alertsData?.data || []
-  const unresolvedAlerts = alerts.filter((a) => !a.isResolved)
+  const unresolvedAlerts = unresolvedAlertsData?.data || []
+  const resolvedAlerts = resolvedAlertsData?.data || []
+  const alerts = [...unresolvedAlerts, ...resolvedAlerts]
   const powerNodeIds = new Set(sensors.filter((s) => s.type === 'power').map((s) => s.nodeId))
   const powerAlertsByRoomId = new Map<string, boolean>()
   unresolvedAlerts.forEach((a) => {
@@ -165,34 +214,32 @@ export function Dashboard() {
 
         <main className="flex-1 p-3 pb-20 sm:p-5 sm:pb-24 lg:p-6 lg:pb-6">
           {activeTab === 'dashboard' && (
-            <div className="space-y-6">
-              {/* Page header */}
-              <header className="border-b border-border/50 pb-4">
-                <h2 className="text-xl font-bold tracking-tight text-foreground sm:text-2xl">
-                  ภาพรวมระบบ
-                </h2>
-                <p className="mt-1 text-sm text-muted-foreground">
-                  ติดตามสถานะห้องเก็บยาสมุนไพรแบบเรียลไทม์
-                </p>
+            <div className="space-y-5">
+              {/* Page header + weather inline */}
+              <header className="space-y-3">
+                <div>
+                  <h2 className="text-xl font-bold tracking-tight text-foreground sm:text-2xl">
+                    ภาพรวมระบบ
+                  </h2>
+                  <p className="mt-0.5 text-sm text-muted-foreground">
+                    ติดตามสถานะห้องเก็บยาสมุนไพรแบบเรียลไทม์
+                  </p>
+                </div>
+                {weather && <WeatherCard weather={weather} />}
               </header>
 
-              {/* Stats + AC status */}
-              <section aria-label="สถิติระบบ">
-                <StatsCards stats={stats} />
-              </section>
+              {/* Stats */}
+              <StatsCards stats={stats} />
 
-              {/* Room cards — full width */}
+              {/* Room cards */}
               <section aria-label="ห้องเก็บยา">
-                <div className="mb-3 flex items-center gap-3">
-                  <div className="h-7 w-1 rounded-full bg-primary shadow-sm shadow-primary/20" />
-                  <h3 className="text-base font-semibold tracking-tight text-foreground">
-                    ห้องเก็บยา
-                  </h3>
-                  <span className="text-xs text-muted-foreground">
+                <h3 className="mb-3 text-sm font-semibold text-muted-foreground uppercase tracking-wider">
+                  ห้องเก็บยา
+                  <span className="ml-2 text-xs font-normal normal-case tracking-normal">
                     {rooms.length} ห้อง
                   </span>
-                </div>
-                <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4">
+                </h3>
+                <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4">
                   {rooms.map((room) => {
                     const latest = latestData?.data?.[room._id]
                     const latestDataForCard: EnvironmentalSensorData | undefined = latest
@@ -228,62 +275,97 @@ export function Dashboard() {
                 )}
               </section>
 
-              {/* Room detail — shown when room selected */}
+              {/* Room detail — tabbed interface */}
               {selectedRoomData?.data && (
                 <section
-                  className="space-y-5 rounded-2xl border border-primary/20 bg-primary/5 p-4 sm:p-6"
+                  className="rounded-2xl border border-border/60 bg-card p-4 shadow-sm sm:p-5"
                   aria-label="รายละเอียดห้องที่เลือก"
                 >
-                  <div className="flex items-center gap-3">
-                    <div className="h-7 w-1 rounded-full bg-primary shadow-sm shadow-primary/20" />
-                    <h3 className="text-base font-semibold tracking-tight text-foreground">
-                      {selectedRoomData.data.room?.name}
-                    </h3>
-                    <span className="rounded-full bg-primary/15 px-2 py-0.5 text-xs font-medium text-primary">
-                      กำลังดูอยู่
-                    </span>
+                  {/* Title bar with close button */}
+                  <div className="mb-4 flex items-center justify-between">
+                    <div className="flex items-center gap-2.5">
+                      <div className="h-6 w-1 rounded-full bg-primary" />
+                      <h3 className="text-base font-semibold text-foreground">
+                        {selectedRoomData.data.room?.name}
+                      </h3>
+                    </div>
+                    <button
+                      onClick={() => setSelectedRoomId(null)}
+                      className="rounded-lg p-1.5 text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
+                      aria-label="ปิดรายละเอียดห้อง"
+                    >
+                      <X className="h-4 w-4" />
+                    </button>
                   </div>
 
-                  {/* Sensor chart + ML summary side by side on large screens */}
-                  <div className="grid gap-4 lg:grid-cols-2">
-                    <SensorChart
-                      data={selectedRoomData.data.sensorData || []}
-                      room={selectedRoomData.data.room}
-                      title={`ข้อมูลเซ็นเซอร์ - ${selectedRoomData.data.room?.name || ''}`}
-                    />
-                    <MLAnalysisPanel analysis={mlAnalysis ?? null} />
-                  </div>
+                  <Tabs defaultValue="sensors" className="space-y-4">
+                    <TabsList className="w-full sm:w-auto">
+                      <TabsTrigger value="sensors">เซ็นเซอร์</TabsTrigger>
+                      <TabsTrigger value="ml">AI วิเคราะห์</TabsTrigger>
+                      <TabsTrigger value="forecast">พยากรณ์</TabsTrigger>
+                      {(climateAnalysis || acRecommendation) && (
+                        <TabsTrigger value="climate">อากาศ & แอร์</TabsTrigger>
+                      )}
+                    </TabsList>
 
-                  {/* ML metrics + anomaly */}
-                  <div className="grid gap-4 sm:grid-cols-2">
-                    <MLMetricsCard
-                      metrics={mlAnalysis?.prediction?.metrics}
-                      modelName={mlAnalysis?.prediction?.model}
-                      error={mlError}
-                      isRoomSelected={!!selectedRoomId}
-                    />
-                    <AnomalyDetectionCard
-                      anomaly={mlAnalysis?.anomaly ?? null}
-                      userFriendlyAnomaly={mlAnalysis?.userFriendly?.anomaly}
-                      error={mlError}
-                      isRoomSelected={!!selectedRoomId}
-                    />
-                  </div>
+                    {/* Tab: เซ็นเซอร์ */}
+                    <TabsContent value="sensors">
+                      <SensorChart
+                        data={selectedRoomData.data.sensorData || []}
+                        room={selectedRoomData.data.room}
+                        title={`ข้อมูลเซ็นเซอร์ - ${selectedRoomData.data.room?.name || ''}`}
+                      />
+                    </TabsContent>
 
-                  {/* Prediction chart */}
-                  <PredictionChart
-                    predictions={mlAnalysis?.prediction ?? null}
-                    title={`การพยากรณ์ - ${selectedRoomData.data.room?.name || ''}`}
-                    showBothCharts
-                  />
+                    {/* Tab: AI วิเคราะห์ */}
+                    <TabsContent value="ml" className="space-y-4">
+                      <MLAnalysisPanel analysis={mlAnalysis ?? null} />
+                      <div className="grid gap-4 sm:grid-cols-2">
+                        <MLMetricsCard
+                          metrics={mlAnalysis?.prediction?.metrics}
+                          modelName={mlAnalysis?.prediction?.model}
+                          error={mlError}
+                          isRoomSelected={!!selectedRoomId}
+                        />
+                        <AnomalyDetectionCard
+                          anomaly={mlAnalysis?.anomaly ?? null}
+                          userFriendlyAnomaly={mlAnalysis?.userFriendly?.anomaly}
+                          error={mlError}
+                          isRoomSelected={!!selectedRoomId}
+                        />
+                      </div>
+                    </TabsContent>
+
+                    {/* Tab: พยากรณ์ */}
+                    <TabsContent value="forecast">
+                      <PredictionChart
+                        predictions={mlAnalysis?.prediction ?? null}
+                        title={`การพยากรณ์ - ${selectedRoomData.data.room?.name || ''}`}
+                        showBothCharts
+                      />
+                    </TabsContent>
+
+                    {/* Tab: อากาศ & แอร์ */}
+                    {(climateAnalysis || acRecommendation) && (
+                      <TabsContent value="climate">
+                        <div className="grid gap-4 sm:grid-cols-2">
+                          {climateAnalysis && (
+                            <ClimateComparisonCard analysis={climateAnalysis} />
+                          )}
+                          {acRecommendation && (
+                            <ACRecommendationCard recommendation={acRecommendation} />
+                          )}
+                        </div>
+                      </TabsContent>
+                    )}
+                  </Tabs>
                 </section>
               )}
 
               {/* Hint when no room selected */}
               {!selectedRoomId && rooms.length > 0 && (
                 <p className="flex items-center justify-center gap-2 py-2 text-sm text-muted-foreground">
-                  <span>👆</span>
-                  คลิกการ์ดห้องเพื่อดูกราฟและผลวิเคราะห์ ML
+                  คลิกการ์ดห้องเพื่อดูรายละเอียดและผลวิเคราะห์
                 </p>
               )}
             </div>

@@ -1,8 +1,7 @@
 'use client'
 
-import { Thermometer, Droplets, MapPin, Cpu, Settings, AirVent, Power, PowerOff, AlertTriangle } from 'lucide-react'
+import { Thermometer, Droplets, MapPin, Cpu, Settings, AirVent, AlertTriangle, Wifi, WifiOff } from 'lucide-react'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
-import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import type { Room, SensorNode, EnvironmentalSensorData, ACRoomStatus } from '@/lib/types'
 
@@ -127,72 +126,37 @@ export function RoomCard({ room, nodes, latestData, roomACStatus, hasPowerAlert,
           </div>
         </div>
 
-        {/* AC status */}
-        <div
-          className={`rounded-xl border p-3.5 ${hasPowerAlert
-            ? 'border-warning/50 bg-warning/5'
-            : 'border-border/40 bg-muted/20'
-            }`}
-        >
-          <div className="flex items-center justify-between gap-2">
-            <div className="flex items-center gap-2 text-xs font-medium text-muted-foreground">
+        {/* Footer: sensors + AC status compact */}
+        <div className="flex flex-wrap items-center gap-x-3 gap-y-1.5 border-t border-border/50 pt-3 text-xs text-muted-foreground">
+          <span className="inline-flex items-center gap-1.5">
+            <Cpu className="h-3.5 w-3.5 opacity-70" />
+            {nodes.length} เซ็นเซอร์
+          </span>
+          {onlineNodes > 0 && (
+            <span className="inline-flex items-center gap-1 text-success">
+              <Wifi className="h-3 w-3" />
+              {onlineNodes}
+            </span>
+          )}
+          {offlineNodes > 0 && (
+            <span className="inline-flex items-center gap-1 text-destructive">
+              <WifiOff className="h-3 w-3" />
+              {offlineNodes}
+            </span>
+          )}
+          {roomACStatus && roomACStatus.units.length > 0 && (
+            <span className="ml-auto inline-flex items-center gap-1.5">
               <AirVent className="h-3.5 w-3.5" />
-              <span>เครื่องปรับอากาศ</span>
-            </div>
-            {hasPowerAlert && (
-              <Badge
-                variant="outline"
-                className="border-warning/60 bg-warning/10 text-warning text-[10px]"
-              >
-                <AlertTriangle className="mr-0.5 h-3 w-3" />
-                กระแสผิดปกติ
-              </Badge>
-            )}
-          </div>
-          {roomACStatus && roomACStatus.units.length > 0 ? (
-            <div className="mt-2 flex flex-wrap items-center gap-3 text-sm">
-              <span className="inline-flex items-center gap-1.5 rounded-md bg-success/10 px-2 py-1 text-success">
-                <Power className="h-3.5 w-3.5" />
-                เปิด {roomACStatus.onCount}
-              </span>
-              <span className="inline-flex items-center gap-1.5 text-muted-foreground">
-                <PowerOff className="h-3.5 w-3.5" />
-                ปิด {roomACStatus.offCount}
-              </span>
-              <span className="text-muted-foreground">
-                {roomACStatus.totalPowerWatts.toFixed(0)} W
-              </span>
-            </div>
-          ) : (
-            <p className="mt-2 text-sm text-muted-foreground">
-              ไม่ได้ติดตั้ง Power sensor ในห้องนี้
-            </p>
+              {roomACStatus.onCount > 0 ? (
+                <span className="text-success">{roomACStatus.onCount} เปิด</span>
+              ) : (
+                <span>ปิด</span>
+              )}
+              {hasPowerAlert && (
+                <AlertTriangle className="h-3 w-3 text-warning" />
+              )}
+            </span>
           )}
-          {hasPowerAlert && (
-            <p className="mt-2 text-xs text-warning">
-              แอร์มีการกินกระแสมากกว่าปกติ — แอร์อาจจะชำรุด
-            </p>
-          )}
-        </div>
-
-        {/* Footer: sensors & status */}
-        <div className="flex items-center justify-between gap-2 border-t border-border/50 pt-3">
-          <div className="flex items-center gap-2 text-sm text-muted-foreground">
-            <Cpu className="h-4 w-4 opacity-70" />
-            <span>{nodes.length} เซ็นเซอร์</span>
-          </div>
-          <div className="flex gap-2">
-            {onlineNodes > 0 && (
-              <Badge variant="secondary" className="bg-success/15 text-success font-medium">
-                {onlineNodes} ออนไลน์
-              </Badge>
-            )}
-            {offlineNodes > 0 && (
-              <Badge variant="secondary" className="bg-destructive/15 text-destructive font-medium">
-                {offlineNodes} ออฟไลน์
-              </Badge>
-            )}
-          </div>
         </div>
       </CardContent>
     </Card>

@@ -43,8 +43,14 @@ export async function PUT(
       )
     }
 
-    // If changing own password, verify current password
-    if (isSelf && currentPassword) {
+    // If changing own password, require and verify current password
+    if (isSelf) {
+      if (!currentPassword) {
+        return NextResponse.json(
+          { success: false, error: 'กรุณากรอกรหัสผ่านปัจจุบัน' },
+          { status: 400 }
+        )
+      }
       const isValid = await authService.verifyPassword(currentPassword, user.passwordHash)
 
       if (!isValid) {

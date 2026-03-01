@@ -18,7 +18,10 @@ export async function POST(request: NextRequest) {
   }
 
   try {
-    const count = await db.resolveAllAlerts(session.name)
+    // Operators can only resolve alerts in their assigned rooms
+    const count = session.role === 'operator'
+      ? await db.resolveAllAlertsForRooms(session.name, session.assignedRooms)
+      : await db.resolveAllAlerts(session.name)
 
     await auditLogService.create({
       userId: session.userId,
@@ -29,7 +32,7 @@ export async function POST(request: NextRequest) {
       resource: 'alert',
       resourceId: 'all',
       details: `ยืนยันการแจ้งเตือนทั้งหมด ${count} รายการ`,
-      metadata: { count },
+      metadata: { count, scoped: session.role === 'operator' ? session.assignedRooms : 'all' },
       ipAddress,
       userAgent,
       success: true,

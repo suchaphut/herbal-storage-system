@@ -1,6 +1,6 @@
 'use client'
 
-import { Bell, Moon, Sun, Leaf, LogIn, LogOut, User, AlertCircle, AlertTriangle, Info, CheckCircle2, Clock } from 'lucide-react'
+import { Bell, Moon, Sun, Leaf, LogIn, LogOut, User, AlertCircle, AlertTriangle, Info, CheckCircle2, Clock, Settings } from 'lucide-react'
 import Link from 'next/link'
 import { useRouter } from 'next/navigation'
 import { Button } from '@/components/ui/button'
@@ -16,6 +16,7 @@ import { ScrollArea } from '@/components/ui/scroll-area'
 import { useTheme } from 'next-themes'
 import { useEffect, useState } from 'react'
 import { useAuth } from '@/components/auth/auth-context'
+import { UserNotificationSettings } from './user-notification-settings'
 import type { UserRole, Alert } from '@/lib/types'
 
 const ROLE_LABELS: Record<UserRole, string> = {
@@ -217,6 +218,15 @@ export function Header({ alertCount, alerts = [], onResolveAlert, onResolveAll }
                       {ROLE_LABELS[user.role]}
                     </Badge>
                   </div>
+                  <DropdownMenuSeparator />
+                  <UserNotificationSettings
+                    trigger={
+                      <DropdownMenuItem onSelect={(e) => e.preventDefault()}>
+                        <Settings className="mr-2 h-4 w-4" />
+                        ตั้งค่าการแจ้งเตือน
+                      </DropdownMenuItem>
+                    }
+                  />
                   <DropdownMenuSeparator />
                   <DropdownMenuItem onClick={handleLogout} className="text-red-600 focus:text-red-600">
                     <LogOut className="mr-2 h-4 w-4" />

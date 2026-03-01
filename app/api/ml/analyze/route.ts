@@ -1,13 +1,39 @@
-import { NextResponse } from 'next/server'
+import { NextRequest, NextResponse } from 'next/server'
 import { dbService as db } from '@/lib/db-service'
+import { verifyAuth } from '@/lib/auth-middleware'
 import { analyzeRoom, detectPowerAnomaly } from '@/lib/ml-service'
+import { sendNotificationToRoomUsers } from '@/lib/notification-service'
 import { aggregateEnvironmentalByTime } from '@/lib/sensor-aggregation'
+import { th } from '@/lib/i18n'
 import type { EnvironmentalSensorData, PowerSensorData } from '@/lib/types'
 
-export async function GET(request: Request) {
+// ─── Rate limit: ป้องกันส่ง notification ซ้ำบ่อยเกินไป ──────────────────
+// Key: `${roomId}:${nodeId}`, Value: timestamp ที่ส่งล่าสุด (ms)
+const lastNotificationSentMs = new Map<string, number>()
+const NOTIFICATION_COOLDOWN_MS = 10 * 60 * 1000 // ส่งซ้ำได้ทุก 10 นาที
+
+function canSendNotification(roomId: string, nodeId: string): boolean {
+  const key = `${roomId}:${nodeId}`
+  const lastSent = lastNotificationSentMs.get(key)
+  if (!lastSent) return true
+  return Date.now() - lastSent > NOTIFICATION_COOLDOWN_MS
+}
+
+function markNotificationSent(roomId: string, nodeId: string): void {
+  lastNotificationSentMs.set(`${roomId}:${nodeId}`, Date.now())
+}
+
+export async function GET(request: NextRequest) {
+  const authResult = await verifyAuth(request)
+  if (!authResult.success) {
+    return NextResponse.json(
+      { success: false, error: authResult.error },
+      { status: authResult.status }
+    )
+  }
+
   try {
-    const { searchParams } = new URL(request.url)
-    const roomId = searchParams.get('roomId')
+    const roomId = request.nextUrl.searchParams.get('roomId')
 
     if (!roomId) {
       return NextResponse.json(
@@ -24,13 +50,10 @@ export async function GET(request: Request) {
       )
     }
 
-    const historicalData = await db.getSensorDataByRoom(roomId, 288)
-    const envData = historicalData.filter(
-      (d): d is EnvironmentalSensorData => d.type === 'environmental'
-    )
-    const powerData = historicalData.filter(
-      (d): d is PowerSensorData => d.type === 'power'
-    )
+    const [envData, powerData] = await Promise.all([
+      db.getSensorDataByRoomAndType(roomId, 'environmental', 288) as Promise<EnvironmentalSensorData[]>,
+      db.getSensorDataByRoomAndType(roomId, 'power', 288) as Promise<PowerSensorData[]>,
+    ])
 
     const nodes = await db.getSensorNodes()
     const roomNodes = nodes.filter((n) => n.roomId?.toString() === roomId)
@@ -66,11 +89,11 @@ export async function GET(request: Request) {
     const powerNode = roomNodes.find((n) => n.type === 'power')
     if (powerNode) {
       const powerHistory = powerData.filter((d) => d.nodeId === powerNode.nodeId)
-      const latestPower = powerHistory[powerHistory.length - 1]
+      const latestPower = powerHistory[0]
       if (latestPower && powerHistory.length >= 2) {
-        const powerAnomaly = detectPowerAnomaly(
+        const powerAnomaly = await detectPowerAnomaly(
           latestPower,
-          powerHistory.slice(0, -1),
+          powerHistory.slice(1),
           { useHistoricalRange: true, deviceExpectedOn: false }
         )
         analysis.powerAnomaly = powerAnomaly
@@ -79,6 +102,107 @@ export async function GET(request: Request) {
       } else {
         analysis.powerPredictionSummary =
           'มี Power Sensor ในห้องนี้ — รอข้อมูลเพิ่มเพื่อวิเคราะห์การพยากรณ์และความผิดปกติ'
+      }
+    }
+
+    // ─── สร้าง Alert + ส่งแจ้งเตือนเมื่อตรวจพบ Anomaly ────────────────────
+    if (analysis.anomaly.isAnomaly && environmentalNode.roomId) {
+      const anomalyNodeId = environmentalNode.nodeId
+      const hasActiveAnomalyAlert = await db.hasActiveAlertForNode(
+        roomId,
+        anomalyNodeId,
+        'anomaly'
+      )
+
+      const safeScore = Math.max(0, Math.min(1, analysis.anomaly.anomalyScore))
+
+      const newSeverity = safeScore > 0.85 ? 'critical' : 'warning' as const
+      const newMessage = `[ML] ${th.alert.anomalyDetected(safeScore * 100)}`
+
+      if (!hasActiveAnomalyAlert) {
+        // สร้าง alert ใหม่ + ส่งแจ้งเตือน
+        const alert = await db.createAlert({
+          roomId,
+          nodeId: anomalyNodeId,
+          type: 'anomaly',
+          severity: newSeverity,
+          message: newMessage,
+          data: {
+            anomalyScore: safeScore,
+            source: 'ml_environmental',
+          },
+          isResolved: false,
+          resolvedAt: null,
+          resolvedBy: null,
+        })
+
+        console.log(`[ML Analyze] Created anomaly alert (score=${(safeScore * 100).toFixed(0)}%) — sending notification`)
+        markNotificationSent(roomId, anomalyNodeId)
+        db.getAllUsers().then(async (users) => {
+          return sendNotificationToRoomUsers(users, roomId, alert, room, environmentalNode)
+        }).catch((err) =>
+          console.error('[ML Analyze] Failed to send anomaly notification:', err)
+        )
+      } else {
+        // มี alert อยู่แล้ว → อัปเดต severity/score ให้ตรงกับค่าปัจจุบัน
+        // แล้วส่งแจ้งเตือนใหม่ (rate limited ทุก 10 นาที) ด้วยข้อมูลล่าสุด
+        const unresolvedAlerts = await db.getAlerts(false, 50)
+        const existingAlert = unresolvedAlerts.find(
+          (a) => a.nodeId === anomalyNodeId && a.type === 'anomaly' && String(a.roomId) === roomId
+        )
+        if (existingAlert) {
+          // อัปเดต alert ให้สะท้อนค่า anomaly ล่าสุด
+          const updatedAlert = await db.updateAlert(existingAlert._id, {
+            severity: newSeverity,
+            message: newMessage,
+            data: { ...existingAlert.data, anomalyScore: safeScore, source: 'ml_environmental' },
+          })
+
+          if (updatedAlert && canSendNotification(roomId, anomalyNodeId)) {
+            console.log(`[ML Analyze] Updated existing alert (score=${(safeScore * 100).toFixed(0)}%) — sending notification`)
+            markNotificationSent(roomId, anomalyNodeId)
+            db.getAllUsers().then(async (users) => {
+              return sendNotificationToRoomUsers(users, roomId, updatedAlert, room, environmentalNode)
+            }).catch((err) =>
+              console.error('[ML Analyze] Failed to send updated anomaly notification:', err)
+            )
+          }
+        }
+      }
+    }
+
+    // ─── สร้าง Alert + ส่งแจ้งเตือนเมื่อตรวจพบ Power Anomaly ──────────────
+    if (analysis.powerAnomaly?.isAnomaly && powerNode?.roomId) {
+      const powerNodeId = powerNode.nodeId
+      const hasActivePowerAlert = await db.hasActiveAlertForNode(
+        roomId,
+        powerNodeId,
+        'anomaly'
+      )
+
+      if (!hasActivePowerAlert) {
+        const safeScore = Math.max(0, Math.min(1, analysis.powerAnomaly.anomalyScore))
+        const alert = await db.createAlert({
+          roomId,
+          nodeId: powerNodeId,
+          type: 'anomaly',
+          severity: safeScore >= 0.9 ? 'critical' : 'warning',
+          message: `[ML] ${analysis.powerAnomaly.message}`,
+          data: {
+            anomalyScore: safeScore,
+            source: 'ml_power',
+          },
+          isResolved: false,
+          resolvedAt: null,
+          resolvedBy: null,
+        })
+
+        console.log(`[ML Analyze] Created power anomaly alert — sending notification`)
+        db.getAllUsers().then(async (users) => {
+          return sendNotificationToRoomUsers(users, roomId, alert, room, powerNode)
+        }).catch((err) =>
+          console.error('[ML Analyze] Failed to send power anomaly notification:', err)
+        )
       }
     }
 

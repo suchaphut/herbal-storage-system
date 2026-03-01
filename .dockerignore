@@ -1,0 +1,15 @@
+node_modules
+.next
+.git
+.gitignore
+.env*
+!.env.example
+ml_models
+__pycache__
+*.pyc
+.DS_Store
+Thumbs.db
+README.md
+docs/
+.vscode/
+.idea/
