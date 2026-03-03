@@ -18,6 +18,7 @@ export const authDbService = {
     await dbConnect()
     const user = await UserModel.create({
       ...userData,
+      email: userData.email.toLowerCase(),
       lastLogin: userData.lastLogin ?? null,
       loginAttempts: userData.loginAttempts ?? 0,
       lockedUntil: userData.lockedUntil ?? null,
