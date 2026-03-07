@@ -11,6 +11,7 @@ import {
   Activity,
   Shield,
   Users,
+  Info,
 } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { useAuth } from '@/components/auth/auth-context'
@@ -38,6 +39,7 @@ const navItems: NavItem[] = [
   { id: 'users', label: 'จัดการผู้ใช้', icon: Users, allowedRoles: ['admin'] },
   { id: 'audit', label: 'Audit Log', icon: Shield, allowedRoles: ['admin'] },
   { id: 'settings', label: 'ตั้งค่า', icon: Settings, allowedRoles: ['admin', 'operator'] },
+  { id: 'about', label: 'เกี่ยวกับ', icon: Info },
 ]
 
 export function SidebarNav({ activeTab, onTabChange }: SidebarNavProps) {

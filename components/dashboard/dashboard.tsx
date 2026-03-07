@@ -20,6 +20,7 @@ import { UserManagement } from './user-management'
 import { AuditLogViewer } from './audit-log-viewer'
 import { MobileBottomNav } from './mobile-bottom-nav'
 import { SensorDataViewer } from './sensor-data-viewer'
+import { AboutPanel } from './about-panel'
 import { WeatherCard } from './WeatherCard'
 import { ClimateComparisonCard } from './ClimateComparisonCard'
 import { ACRecommendationCard } from './ACRecommendationCard'
@@ -487,6 +488,8 @@ export function Dashboard() {
               <AuditLogViewer />
             </div>
           )}
+
+          {activeTab === 'about' && <AboutPanel />}
         </main>
       </div>
     </div>
