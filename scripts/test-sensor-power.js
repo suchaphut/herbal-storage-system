@@ -10,8 +10,9 @@
  */
 
 const http = require('http')
+const https = require('https')
 
-const BASE_URL = process.env.API_BASE_URL || 'http://localhost:3000'
+const BASE_URL = process.env.API_BASE_URL || 'https://herbal-storage-system-production-a379.up.railway.app'
 const NODE_ID = process.env.SENSOR_NODE_ID || 'ESP32-POWER-001'
 const INTERVAL_MS = parseInt(process.env.INTERVAL_MS || '5000', 10)
 const API_KEY = process.env.SENSOR_API_KEY || ''
@@ -47,7 +48,8 @@ function sendData() {
     },
   }
 
-  const req = http.request(options, (res) => {
+  const client = url.protocol === 'https:' ? https : http
+  const req = client.request(options, (res) => {
     let data = ''
     res.on('data', (chunk) => { data += chunk })
     res.on('end', () => {

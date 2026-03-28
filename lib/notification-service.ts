@@ -130,6 +130,12 @@ async function sendDiscordNotificationWithConfig(
   if (alert.data.anomalyScore !== undefined) {
     embed.fields.push({ name: th.notification.fieldAnomalyScore, value: `${(alert.data.anomalyScore * 100).toFixed(0)}%`, inline: true })
   }
+  if (alert.data.offlineMinutes !== undefined) {
+    embed.fields.push({ name: '⏱️ ออฟไลน์', value: `${alert.data.offlineMinutes} นาที`, inline: true })
+  }
+  if (alert.data.lastSeen != null) {
+    embed.fields.push({ name: '📡 ส่งข้อมูลล่าสุด', value: new Date(String(alert.data.lastSeen)).toLocaleString('th-TH'), inline: true })
+  }
 
   try {
     const response = await fetch(webhookUrl, {
@@ -380,6 +386,12 @@ async function sendLineNotificationWithConfig(
   if (alert.data.anomalyScore !== undefined) {
     message += `\n${th.notification.fieldAnomalyScore}: ${(alert.data.anomalyScore * 100).toFixed(0)}%`
   }
+  if (alert.data.offlineMinutes !== undefined) {
+    message += `\n⏱️ ออฟไลน์: ${alert.data.offlineMinutes} นาที`
+  }
+  if (alert.data.lastSeen != null) {
+    message += `\n📡 ส่งข้อมูลล่าสุด: ${new Date(String(alert.data.lastSeen)).toLocaleString('th-TH')}`
+  }
 
   try {
     const response = await fetch('https://notify-api.line.me/api/notify', {
@@ -554,8 +566,28 @@ export async function sendNotificationToUser(
 }
 
 /**
+ * Check if a room's notification settings allow this alert type.
+ * Returns true if: no room provided, no notification settings, or the alert type is enabled.
+ */
+function isAlertTypeEnabledForRoom(room: Room | null | undefined, alertType: string): boolean {
+  if (!room?.notifications) return true // no room config → always send
+  const n = room.notifications
+  switch (alertType) {
+    case 'threshold': return n.alertOnThreshold !== false
+    case 'anomaly': return n.alertOnAnomaly !== false
+    case 'offline': return n.alertOnOffline !== false
+    default: return true // system alerts always send
+  }
+}
+
+/**
  * Fan-out: send notification to all users responsible for the given room.
  * Admins receive alerts for all rooms. Operators/viewers only for assigned rooms.
+ *
+ * Priority order:
+ * 1. Per-user webhooks (users with personal Discord/LINE configured)
+ * 2. Per-room webhooks (room-level Discord/LINE configured in room settings)
+ * 3. Global env webhooks (DISCORD_WEBHOOK_URL / LINE_NOTIFY_TOKEN)
  */
 export async function sendNotificationToRoomUsers(
   users: User[],
@@ -564,6 +596,14 @@ export async function sendNotificationToRoomUsers(
   room?: Room | null,
   node?: SensorNode | null
 ): Promise<void> {
+  // Check if this alert type is enabled for the room
+  if (!isAlertTypeEnabledForRoom(room, alert.type)) {
+    console.log(
+      `[Notification] Alert type "${alert.type}" is disabled for room ${room?.name ?? roomId} — skipping`
+    )
+    return
+  }
+
   const responsible = users.filter((u) => {
     if (!u.isActive) return false
     if (u.role === 'admin') return true
@@ -576,28 +616,46 @@ export async function sendNotificationToRoomUsers(
     ` → ${responsible.length}/${users.length} users responsible`
   )
 
+  // 1. Try per-user webhooks first
   const withWebhook = responsible.filter(
     (u) =>
       (u.notificationPreferences?.discord && u.notificationPreferences?.discordWebhookUrl) ||
       (u.notificationPreferences?.line && u.notificationPreferences?.lineAccessToken)
   )
 
-  if (withWebhook.length === 0) {
-    console.log('[Notification] No users have personal webhooks — trying global env fallback')
-    // Fallback: ส่งผ่าน global DISCORD_WEBHOOK_URL / LINE_NOTIFY_TOKEN จาก .env.local
-    const globalResult = await sendNotification(alert, room, node)
-    if (!globalResult.discord && !globalResult.line) {
-      console.log('[Notification] No global webhooks configured either — notification not sent')
-    }
+  if (withWebhook.length > 0) {
+    await Promise.all(
+      withWebhook.map((u) => {
+        console.log(`[Notification] Sending to user: ${u.email}`)
+        return sendNotificationToUser(u, alert, room, node)
+      })
+    )
     return
   }
 
-  await Promise.all(
-    withWebhook.map((u) => {
-      console.log(`[Notification] Sending to user: ${u.email}`)
-      return sendNotificationToUser(u, alert, room, node)
-    })
-  )
+  // 2. Try per-room webhooks
+  const roomNotif = room?.notifications
+  if (roomNotif) {
+    let sentViaRoom = false
+    if (roomNotif.discord?.enabled && roomNotif.discord?.webhookUrl) {
+      console.log(`[Notification] Using room-level Discord webhook for ${room?.name}`)
+      const ok = await sendDiscordNotificationWithConfig(roomNotif.discord.webhookUrl, alert, room, node)
+      if (ok) sentViaRoom = true
+    }
+    if (roomNotif.line?.enabled && roomNotif.line?.accessToken) {
+      console.log(`[Notification] Using room-level LINE token for ${room?.name}`)
+      const ok = await sendLineNotificationWithConfig(roomNotif.line.accessToken, alert, room, node)
+      if (ok) sentViaRoom = true
+    }
+    if (sentViaRoom) return
+  }
+
+  // 3. Fallback: global env webhooks
+  console.log('[Notification] No user/room webhooks — trying global env fallback')
+  const globalResult = await sendNotification(alert, room, node)
+  if (!globalResult.discord && !globalResult.line) {
+    console.log('[Notification] No global webhooks configured either — notification not sent')
+  }
 }
 
 /**

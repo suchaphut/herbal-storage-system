@@ -318,6 +318,8 @@ export interface Alert {
     source?: 'threshold' | 'ml_environmental' | 'ml_power'
     lastSeen?: Date | string | null
     offlineMinutes?: number
+    errorKey?: string
+    [key: string]: unknown
   }
   isResolved: boolean
   resolvedAt: Date | null

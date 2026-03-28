@@ -50,7 +50,21 @@ export async function GET(
       )
     }
 
-    const nodes = await db.getSensorNodesByRoom(id)
+    const rawNodes = await db.getSensorNodesByRoom(id)
+
+    // Compute effective status from lastSeen (10-min threshold, matching alert-service)
+    const OFFLINE_THRESHOLD_MS = 10 * 60 * 1000
+    const now = Date.now()
+    const nodes = rawNodes.map((node) => {
+      if (node.lastSeen && node.status === 'online') {
+        const lastSeenMs = new Date(node.lastSeen).getTime()
+        if (now - lastSeenMs > OFFLINE_THRESHOLD_MS) {
+          return { ...node, status: 'offline' as const }
+        }
+      }
+      return node
+    })
+
     const rawData = await db.getSensorDataByRoomAndType(id, 'environmental', 200)
     const sensorData = (rawData || [])
       .filter((d) => d.readings && 'temperature' in d.readings)

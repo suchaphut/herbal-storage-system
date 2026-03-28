@@ -31,8 +31,8 @@ interface NavItem {
 
 const navItems: NavItem[] = [
   { id: 'dashboard', label: 'ภาพรวม', icon: LayoutDashboard },
-  { id: 'rooms', label: 'ห้องเก็บยา', icon: Building2 },
-  { id: 'sensors', label: 'เซ็นเซอร์', icon: Cpu },
+  { id: 'rooms', label: 'จัดการห้องเก็บยา', icon: Building2 },
+  { id: 'sensors', label: 'จัดการเซ็นเซอร์', icon: Cpu },
   { id: 'alerts', label: 'การแจ้งเตือน', icon: Bell },
   { id: 'predictions', label: 'ML พยากรณ์', icon: Brain },
   { id: 'logs', label: 'ประวัติข้อมูล', icon: Activity },

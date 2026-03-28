@@ -145,6 +145,15 @@ export function SensorManagement({
     return room?.name || 'ไม่พบห้อง'
   }
 
+  // Compute effective status from lastSeen (10-min threshold, matching backend)
+  const OFFLINE_THRESHOLD_MS = 10 * 60 * 1000
+  const getEffectiveStatus = (sensor: SensorNode): SensorNode['status'] => {
+    if (!sensor.lastSeen) return sensor.status
+    const diff = Date.now() - new Date(sensor.lastSeen).getTime()
+    if (diff > OFFLINE_THRESHOLD_MS && sensor.status === 'online') return 'offline'
+    return sensor.status
+  }
+
   const getStatusBadge = (status: SensorNode['status']) => {
     switch (status) {
       case 'online':
@@ -398,7 +407,7 @@ export function SensorManagement({
                   <TableCell className="text-muted-foreground">
                     {getRoomName(sensor.roomId)}
                   </TableCell>
-                  <TableCell>{getStatusBadge(sensor.status)}</TableCell>
+                  <TableCell>{getStatusBadge(getEffectiveStatus(sensor))}</TableCell>
                   <TableCell className="text-sm text-muted-foreground">
                     {formatLastSeen(sensor.lastSeen)}
                   </TableCell>

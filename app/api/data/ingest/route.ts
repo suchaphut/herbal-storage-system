@@ -5,6 +5,7 @@ import {
   checkEnvironmentalThresholds,
   checkEnvironmentalAnomaly,
   checkPowerAnomaly,
+  createSystemAlert,
 } from '@/lib/alert-service'
 import { checkRateLimit } from '@/lib/rate-limit'
 import { th } from '@/lib/i18n'
@@ -172,9 +173,10 @@ export async function POST(request: NextRequest) {
       if (room) {
         await checkEnvironmentalThresholds(nodeId, roomId, readings, room.thresholds, room)
         // Fire-and-forget: anomaly detection is throttled internally (5 min debounce)
-        checkEnvironmentalAnomaly(saved, nodeId, roomId, room).catch((err) =>
+        checkEnvironmentalAnomaly(saved, nodeId, roomId, room).catch((err) => {
           console.error('[AlertService] Environmental anomaly check failed:', err)
-        )
+          createSystemAlert('ml_env_error', `ML Environmental anomaly detection failed: ${err instanceof Error ? err.message : String(err)}`, { nodeId })
+        })
       }
     }
 
@@ -183,9 +185,10 @@ export async function POST(request: NextRequest) {
       const roomId = node.roomId.toString()
       const room = await db.getRoomById(roomId)
       // Fire-and-forget: anomaly detection is throttled internally (5 min debounce)
-      checkPowerAnomaly(saved, nodeId, roomId, false, room).catch((err) =>
+      checkPowerAnomaly(saved, nodeId, roomId, false, room).catch((err) => {
         console.error('[AlertService] Power anomaly check failed:', err)
-      )
+        createSystemAlert('ml_power_error', `ML Power anomaly detection failed: ${err instanceof Error ? err.message : String(err)}`, { nodeId })
+      })
     }
 
     return NextResponse.json({
@@ -195,6 +198,7 @@ export async function POST(request: NextRequest) {
     })
   } catch (error) {
     console.error('Data ingest error:', error)
+    createSystemAlert('ingest_error', `Data ingest failed: ${error instanceof Error ? error.message : String(error)}`)
     return NextResponse.json(
       { success: false, error: 'Failed to process sensor data' },
       { status: 500 }

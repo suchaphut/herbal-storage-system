@@ -10,7 +10,7 @@
 
 import { dbService as db } from './db-service'
 import { detectAnomaly, detectPowerAnomaly } from './ml-service'
-import { sendNotificationToRoomUsers } from './notification-service'
+import { sendNotification, sendNotificationToRoomUsers } from './notification-service'
 import { th } from './i18n'
 import type {
   EnvironmentalSensorData,
@@ -337,4 +337,48 @@ export async function checkSensorHeartbeat(): Promise<{
   }
 
   return { checkedNodes: nodes.length, markedOffline, alertsCreated, notificationsSent, autoResolved }
+}
+
+// ─── System alert creation ──────────────────────────────────────────────────
+
+/** Debounce: max one system alert per error key per 30 minutes */
+const lastSystemAlertMs = new Map<string, number>()
+const SYSTEM_ALERT_DEBOUNCE_MS = 30 * 60 * 1000
+
+/**
+ * Create a system alert for infrastructure errors (DB timeout, ML script error, etc.)
+ * Debounced per errorKey so the same error doesn't spam alerts.
+ * Sends notification via global webhooks (not room-specific).
+ */
+export async function createSystemAlert(
+  errorKey: string,
+  message: string,
+  metadata?: Record<string, unknown>
+): Promise<void> {
+  const now = Date.now()
+  const last = lastSystemAlertMs.get(errorKey) ?? 0
+  if (now - last < SYSTEM_ALERT_DEBOUNCE_MS) return
+  lastSystemAlertMs.set(errorKey, now)
+
+  try {
+    const alert = await db.createAlert({
+      roomId: null as unknown as string,
+      nodeId: null as unknown as string,
+      type: 'system',
+      severity: 'info',
+      message,
+      data: { errorKey, ...metadata },
+      isResolved: false,
+      resolvedAt: null,
+      resolvedBy: null,
+    })
+
+    // System alerts use global env webhooks (not room-specific)
+    sendNotification(alert).catch((err) =>
+      console.error('[AlertService] Failed to send system alert notification:', err)
+    )
+  } catch (err) {
+    // Don't throw — system alert creation should never crash the caller
+    console.error('[AlertService] Failed to create system alert:', err)
+  }
 }

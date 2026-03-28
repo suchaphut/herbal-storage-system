@@ -2,7 +2,14 @@ import { NextRequest, NextResponse } from 'next/server'
 import { dbService as db } from '@/lib/db-service'
 import { verifyAuth, requirePermission } from '@/lib/auth-middleware'
 import { auditLogService, getClientInfo } from '@/lib/audit-log-service'
+import { checkSensorHeartbeat } from '@/lib/alert-service'
 import type { SensorNodeType } from '@/lib/types'
+
+// ─── Debounced offline check ────────────────────────────────────────────────
+// Piggyback on GET /api/sensors (polled every 30s by dashboard)
+// to trigger offline detection at most once every 5 minutes.
+let lastHeartbeatCheckMs = 0
+const HEARTBEAT_CHECK_INTERVAL_MS = 5 * 60 * 1000 // 5 minutes
 
 // GET /api/sensors - List all sensors (All authenticated users)
 export async function GET(request: NextRequest) {
@@ -18,15 +25,43 @@ export async function GET(request: NextRequest) {
     const nodes = await db.getSensorNodes()
     const { session } = authResult
 
+    // Fire-and-forget: run offline heartbeat check (debounced to once per 5 min)
+    const now = Date.now()
+    if (now - lastHeartbeatCheckMs > HEARTBEAT_CHECK_INTERVAL_MS) {
+      lastHeartbeatCheckMs = now
+      checkSensorHeartbeat().then((result) => {
+        if (result.markedOffline > 0 || result.alertsCreated > 0) {
+          console.log(
+            `[Sensors/GET] Heartbeat check: ${result.markedOffline} marked offline, ` +
+            `${result.alertsCreated} alerts, ${result.notificationsSent} notifications`
+          )
+        }
+      }).catch((err) =>
+        console.error('[Sensors/GET] Heartbeat check failed:', err)
+      )
+    }
+
+    // Compute effective status from lastSeen (10-min threshold)
+    const OFFLINE_THRESHOLD_MS = 10 * 60 * 1000
+    const nodesWithEffectiveStatus = nodes.map((node) => {
+      if (node.lastSeen && node.status === 'online') {
+        const lastSeenMs = new Date(node.lastSeen).getTime()
+        if (now - lastSeenMs > OFFLINE_THRESHOLD_MS) {
+          return { ...node, status: 'offline' as const }
+        }
+      }
+      return node
+    })
+
     // Filter sensors for operators (they can only see sensors in assigned rooms)
     if (session.role === 'operator') {
-      const filteredNodes = nodes.filter(
+      const filteredNodes = nodesWithEffectiveStatus.filter(
         (node) => node.roomId && session.assignedRooms.includes(String(node.roomId))
       )
       return NextResponse.json({ success: true, data: filteredNodes })
     }
 
-    return NextResponse.json({ success: true, data: nodes })
+    return NextResponse.json({ success: true, data: nodesWithEffectiveStatus })
   } catch (error) {
     return NextResponse.json(
       { success: false, error: 'ไม่สามารถดึงข้อมูลเซ็นเซอร์ได้' },
