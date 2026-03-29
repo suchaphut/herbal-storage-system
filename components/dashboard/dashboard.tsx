@@ -37,6 +37,7 @@ import type {
   ExternalWeatherData,
   ClimateAnalysis,
   ACRecommendation,
+  ACStatus,
 } from '@/lib/types'
 
 const fetcher = async (url: string) => {
@@ -103,6 +104,12 @@ export function Dashboard() {
     data: Record<string, { temperature: number; humidity: number; timestamp: string }>
   }>('/api/data/latest', fetcher, { refreshInterval: 5000 })
 
+  const { data: acStatusData } = useSWR<{ success: boolean; data: ACStatus }>(
+    '/api/data/ac-status',
+    fetcher,
+    { refreshInterval: 10000 }
+  )
+
   // Weather data (global - Prachin Buri)
   const { data: weatherData } = useSWR<{
     success: boolean
@@ -155,6 +162,7 @@ export function Dashboard() {
 
   const rooms = roomsData?.data || []
   const sensors = sensorsData?.data || []
+  const liveACStatus = acStatusData?.success ? acStatusData.data : stats.acStatus
   const unresolvedAlerts = unresolvedAlertsData?.data || []
   const resolvedAlerts = resolvedAlertsData?.data || []
   const alerts = [...unresolvedAlerts, ...resolvedAlerts]
@@ -262,7 +270,7 @@ export function Dashboard() {
                         room={room}
                         nodes={sensors.filter((s) => s.roomId === room._id)}
                         latestData={latestDataForCard}
-                        roomACStatus={stats.acStatus?.byRoom.find((r) => r.roomId === room._id)}
+                        roomACStatus={liveACStatus?.byRoom.find((r) => r.roomId === room._id)}
                         hasPowerAlert={powerAlertsByRoomId.get(room._id) === true}
                         onSelect={handleRoomSelect}
                       />
@@ -376,7 +384,7 @@ export function Dashboard() {
             <RoomManagement
               rooms={rooms}
               sensors={sensors}
-              acStatus={stats.acStatus}
+              acStatus={liveACStatus}
               onUpdate={mutateRooms}
             />
           )}

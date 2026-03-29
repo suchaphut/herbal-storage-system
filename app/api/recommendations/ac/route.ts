@@ -61,12 +61,13 @@ export async function GET(request: NextRequest) {
     let acRunning = false
 
     if (powerNode) {
+      // เปิด = sensor ส่งข้อมูล (online), ปิด = sensor offline
+      acRunning = powerNode.status === 'online'
       const powerData = await db.getSensorDataByNodeId(powerNode.nodeId, 1)
       if (powerData && powerData.length > 0 && powerData[0].type === 'power') {
         const latestPowerData = powerData[0]
         if ('power' in latestPowerData.readings) {
           acPower = latestPowerData.readings.power
-          acRunning = acPower > 50
         }
       }
     }

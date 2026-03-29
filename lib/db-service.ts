@@ -423,26 +423,20 @@ export const dbService = {
       roomNameById[String(r._id)] = r.name ?? ''
     })
 
-    const nodeById: Record<string, SensorNode> = {}
-    powerNodes.forEach((n) => {
-      nodeById[n.nodeId] = n as SensorNode
-    })
-
-    const POWER_ON_THRESHOLD_W = 5
-    const CURRENT_ON_THRESHOLD_A = 0.05
+    const latestByNodeMap = new Map(latestByNode.map(({ _id, doc }: { _id: string; doc: unknown }) => [_id, doc]))
 
     const byRoomMap = new Map<string, ACUnitStatus[]>()
-    for (const { _id: nodeId, doc } of latestByNode) {
-      const node = nodeById[nodeId]
-      if (!node?.roomId) continue
+    for (const node of powerNodes) {
+      if (!node.roomId) continue
       const roomId = String(node.roomId)
-      const r = doc?.readings as { voltage?: number; current?: number; power?: number; energy?: number } | undefined
-      const power = r?.power ?? 0
-      const current = r?.current ?? 0
-      const isOn = power > POWER_ON_THRESHOLD_W || current > CURRENT_ON_THRESHOLD_A
+      const doc = latestByNodeMap.get(node.nodeId) as { readings?: { voltage?: number; current?: number; power?: number; energy?: number } } | undefined
+      const power = doc?.readings?.power ?? 0
+      const current = doc?.readings?.current ?? 0
+      // เปิด = sensor ส่งข้อมูล (online), ปิด = sensor offline (ไม่มีการส่งข้อมูล)
+      const isOn = (node as SensorNode).status === 'online'
       byRoomMap.set(roomId, byRoomMap.get(roomId) ?? [])
       byRoomMap.get(roomId)!.push({
-        nodeId,
+        nodeId: node.nodeId,
         name: node.name,
         power,
         current,

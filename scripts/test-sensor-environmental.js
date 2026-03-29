@@ -1,16 +1,17 @@
 /**
- * Test script: ส่งข้อมูล Environmental Sensor (อุณหภูมิ/ความชื้น) ไปที่ API
+ * Test script: ส่งข้อมูล Environmental Sensor (อุณหภูมิ/ความชื้น) ไปที่ API — ตัวที่ 2
  * ใช้สำหรับทดสอบระบบก่อนต่อเซ็นเซอร์จริง
  *
- * วิธีใช้: node scripts/test-sensor-environmental.js
- * ต้องรันเซิร์ฟเวอร์ (pnpm dev) และมีเซ็นเซอร์ nodeId นี้ในระบบแล้ว (จาก seed: ESP32-ENV-001)
+ * วิธีใช้: node scripts/test-sensor-environmental-002.js
+ * ต้องรันเซิร์ฟเวอร์ (pnpm dev) และมีเซ็นเซอร์ nodeId นี้ในระบบแล้ว (จาก seed: ESP32-ENV-002)
  *
  * เมื่อใช้เซ็นเซอร์จริงแล้ว — ลบไฟล์นี้ออกได้
  */
 
 const http = require('http')
+const https = require('https')
 
-const BASE_URL = process.env.API_BASE_URL || 'http://localhost:3000'
+const BASE_URL = process.env.API_BASE_URL || 'https://herbal-storage-system-production-a379.up.railway.app'
 const NODE_ID = process.env.SENSOR_NODE_ID || 'ESP32-ENV-001'
 const INTERVAL_MS = parseInt(process.env.INTERVAL_MS || '5000', 10)
 const API_KEY = process.env.SENSOR_API_KEY || ''
@@ -41,7 +42,8 @@ function sendData() {
     },
   }
 
-  const req = http.request(options, (res) => {
+  const client = url.protocol === 'https:' ? https : http
+  const req = client.request(options, (res) => {
     let data = ''
     res.on('data', (chunk) => { data += chunk })
     res.on('end', () => {
@@ -68,7 +70,7 @@ function sendData() {
   req.end()
 }
 
-console.log('Test Environmental Sensor')
+console.log('Test Environmental Sensor (ESP32-ENV-001)')
 console.log('  API:', BASE_URL + '/api/data/ingest')
 console.log('  nodeId:', NODE_ID)
 console.log('  interval:', INTERVAL_MS, 'ms')
@@ -77,3 +79,6 @@ console.log('  Ctrl+C to stop\n')
 
 sendData()
 setInterval(sendData, INTERVAL_MS)
+//$env:SENSOR_API_KEY="my-secret-sensor-key-2024"; node scripts/test-sensor-environmental.js
+//$env:SENSOR_API_KEY="my-secret-sensor-key-2024"; node scripts/test-sensor-environmental-002.js
+//$env:SENSOR_API_KEY="my-secret-sensor-key-2024"; node scripts/test-sensor-power.js
