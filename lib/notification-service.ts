@@ -616,24 +616,34 @@ export async function sendNotificationToRoomUsers(
     ` → ${responsible.length}/${users.length} users responsible`
   )
 
-  // 1. Try per-user webhooks first
+  // 1. Send per-user webhooks to users who have them configured
   const withWebhook = responsible.filter(
     (u) =>
       (u.notificationPreferences?.discord && u.notificationPreferences?.discordWebhookUrl) ||
       (u.notificationPreferences?.line && u.notificationPreferences?.lineAccessToken)
   )
+  const withoutWebhook = responsible.filter(
+    (u) =>
+      !(u.notificationPreferences?.discord && u.notificationPreferences?.discordWebhookUrl) &&
+      !(u.notificationPreferences?.line && u.notificationPreferences?.lineAccessToken)
+  )
 
   if (withWebhook.length > 0) {
     await Promise.all(
       withWebhook.map((u) => {
-        console.log(`[Notification] Sending to user: ${u.email}`)
+        console.log(`[Notification] Sending to user (personal webhook): ${u.email}`)
         return sendNotificationToUser(u, alert, room, node)
       })
     )
-    return
   }
 
-  // 2. Try per-room webhooks
+  // If all responsible users have personal webhooks, we're done
+  if (withoutWebhook.length === 0) return
+
+  // 2. For remaining users without personal webhooks, try per-room webhooks
+  console.log(
+    `[Notification] ${withoutWebhook.length} user(s) without personal webhook — trying room/global fallback`
+  )
   const roomNotif = room?.notifications
   if (roomNotif) {
     let sentViaRoom = false
@@ -651,7 +661,7 @@ export async function sendNotificationToRoomUsers(
   }
 
   // 3. Fallback: global env webhooks
-  console.log('[Notification] No user/room webhooks — trying global env fallback')
+  console.log('[Notification] No room webhooks — trying global env fallback')
   const globalResult = await sendNotification(alert, room, node)
   if (!globalResult.discord && !globalResult.line) {
     console.log('[Notification] No global webhooks configured either — notification not sent')

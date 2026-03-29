@@ -147,34 +147,6 @@ export function SettingsPanel() {
         </Card>
       </div>
 
-      {/* Email toggle */}
-      <Card className="border-border/50">
-        <CardHeader>
-          <div className="flex items-center gap-3">
-            <div className="rounded-lg bg-warning/10 p-2">
-              <Bell className="h-5 w-5 text-warning" />
-            </div>
-            <div>
-              <CardTitle className="text-base">การแจ้งเตือนอื่น ๆ</CardTitle>
-              <CardDescription>ช่องทางการแจ้งเตือนเพิ่มเติม</CardDescription>
-            </div>
-          </div>
-        </CardHeader>
-        <CardContent>
-          <div className="flex items-center justify-between">
-            <div>
-              <Label>อีเมล</Label>
-              <p className="text-sm text-muted-foreground">รับการแจ้งเตือนผ่านอีเมล</p>
-            </div>
-            <Switch
-              disabled={isLoading}
-              checked={prefs.email}
-              onCheckedChange={(checked) => setPrefs({ ...prefs, email: checked })}
-            />
-          </div>
-        </CardContent>
-      </Card>
-
       <Separator />
 
       {/* Save */}
