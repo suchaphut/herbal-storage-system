@@ -65,7 +65,6 @@ export async function POST(request: NextRequest) {
       thresholds,
       notifications: {
         discord: { enabled: false, webhookUrl: '' },
-        line: { enabled: false, accessToken: '' },
         alertOnThreshold: true,
         alertOnAnomaly: true,
         alertOnOffline: true,
