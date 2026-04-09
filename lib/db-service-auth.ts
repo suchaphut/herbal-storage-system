@@ -71,8 +71,6 @@ export const authDbService = {
     prefs: {
       discord?: boolean
       discordWebhookUrl?: string
-      line?: boolean
-      lineAccessToken?: string
       email?: boolean
     }
   ): Promise<User | null> {
@@ -80,8 +78,6 @@ export const authDbService = {
     const update: Record<string, unknown> = {}
     if (prefs.discord !== undefined) update['notificationPreferences.discord'] = prefs.discord
     if (prefs.discordWebhookUrl !== undefined) update['notificationPreferences.discordWebhookUrl'] = prefs.discordWebhookUrl
-    if (prefs.line !== undefined) update['notificationPreferences.line'] = prefs.line
-    if (prefs.lineAccessToken !== undefined) update['notificationPreferences.lineAccessToken'] = prefs.lineAccessToken
     if (prefs.email !== undefined) update['notificationPreferences.email'] = prefs.email
     return await UserModel.findByIdAndUpdate(userId, { $set: update }, { new: true }).lean()
   },

@@ -1,7 +1,7 @@
 'use client'
 
 import { useState, useEffect } from 'react'
-import { Save, Bell, Send, MessageSquare, CheckCircle2, AlertCircle } from 'lucide-react'
+import { Save, MessageSquare, CheckCircle2, AlertCircle } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
 import { Input } from '@/components/ui/input'
@@ -12,16 +12,12 @@ import { Separator } from '@/components/ui/separator'
 interface UserNotifPrefs {
   discord: boolean
   discordWebhookUrl: string
-  line: boolean
-  lineAccessToken: string
   email: boolean
 }
 
 const DEFAULT_PREFS: UserNotifPrefs = {
   discord: false,
   discordWebhookUrl: '',
-  line: false,
-  lineAccessToken: '',
   email: true,
 }
 
@@ -66,12 +62,12 @@ export function SettingsPanel() {
       <div>
         <h2 className="text-2xl font-bold text-foreground">ตั้งค่าการแจ้งเตือน</h2>
         <p className="text-sm text-muted-foreground">
-          กำหนด Discord Webhook URL และ LINE Access Token ส่วนตัวของคุณ
+          กำหนด Discord Webhook URL ส่วนตัวของคุณ
           ระบบจะส่งการแจ้งเตือนมาหาคุณโดยตรงเมื่อเกิด alert ในห้องที่คุณรับผิดชอบ
         </p>
       </div>
 
-      <div className="grid gap-6 lg:grid-cols-2">
+      <div className="grid gap-6">
         {/* Discord */}
         <Card className="border-border/50">
           <CardHeader>
@@ -104,43 +100,6 @@ export function SettingsPanel() {
                 value={prefs.discordWebhookUrl}
                 disabled={!prefs.discord || isLoading}
                 onChange={(e) => setPrefs({ ...prefs, discordWebhookUrl: e.target.value })}
-              />
-            </div>
-          </CardContent>
-        </Card>
-
-        {/* LINE Notify */}
-        <Card className="border-border/50">
-          <CardHeader>
-            <div className="flex items-center gap-3">
-              <div className="rounded-lg bg-[#00B900]/10 p-2">
-                <Send className="h-5 w-5 text-[#00B900]" />
-              </div>
-              <div>
-                <CardTitle className="text-base">LINE Notify</CardTitle>
-                <CardDescription>ส่งการแจ้งเตือนไปยัง LINE ของคุณ</CardDescription>
-              </div>
-            </div>
-          </CardHeader>
-          <CardContent className="space-y-4">
-            <div className="flex items-center justify-between">
-              <Label htmlFor="line-enabled">เปิดใช้งาน LINE</Label>
-              <Switch
-                id="line-enabled"
-                disabled={isLoading}
-                checked={prefs.line}
-                onCheckedChange={(checked) => setPrefs({ ...prefs, line: checked })}
-              />
-            </div>
-            <div className="grid gap-2">
-              <Label htmlFor="line-token">Access Token</Label>
-              <Input
-                id="line-token"
-                type="password"
-                placeholder="LINE Notify Access Token"
-                value={prefs.lineAccessToken}
-                disabled={!prefs.line || isLoading}
-                onChange={(e) => setPrefs({ ...prefs, lineAccessToken: e.target.value })}
               />
             </div>
           </CardContent>

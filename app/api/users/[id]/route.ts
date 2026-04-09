@@ -89,7 +89,6 @@ export async function PUT(
           ...user.notificationPreferences,
           ...notificationPreferences,
           discordWebhookUrl: notificationPreferences.discordWebhookUrl ?? user.notificationPreferences.discordWebhookUrl,
-          lineAccessToken: notificationPreferences.lineAccessToken ?? user.notificationPreferences.lineAccessToken,
         }
       }
 
@@ -149,7 +148,6 @@ export async function PUT(
         ...user.notificationPreferences,
         ...notificationPreferences,
         discordWebhookUrl: notificationPreferences.discordWebhookUrl ?? user.notificationPreferences.discordWebhookUrl,
-        lineAccessToken: notificationPreferences.lineAccessToken ?? user.notificationPreferences.lineAccessToken,
       }
     }
     if (typeof isActive === 'boolean') {

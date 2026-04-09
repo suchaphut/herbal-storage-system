@@ -14,7 +14,7 @@
 ระบบนี้พัฒนาเพื่อช่วยผู้ดูแลห้องเก็บยาสมุนไพร:
 
 - **ติดตาม Real-time** — อุณหภูมิและความชื้นจากเซ็นเซอร์ ESP32
-- **แจ้งเตือนอัตโนมัติ** — ผ่าน Discord และ LINE Notify เมื่อค่าเกินเกณฑ์
+- **แจ้งเตือนอัตโนมัติ** — ผ่าน Discord Webhook เมื่อค่าเกินเกณฑ์
 - **ตรวจจับความผิดปกติ** — Anomaly Detection หลายชั้น (Z-Score, IQR, Isolation Forest, LSTM, SVM, Ensemble)
 - **พยากรณ์แนวโน้ม** — ล่วงหน้า 6 ชม. ด้วย Holt-Winters / Prophet + External Weather Regressors
 - **แนะนำการปรับแอร์** — Rule-based + Reinforcement Learning (Q-Learning)
@@ -48,7 +48,7 @@
 │                                                             │
 │  ┌──────────────────────────────────────────────────────┐   │
 │  │          Notification Service                        │   │
-│  │        Discord Webhook  ·  LINE Notify               │   │
+│  │              Discord Webhook                          │   │
 │  └──────────────────────────────────────────────────────┘   │
 └─────────────────────────────────────────────────────────────┘
 ```
@@ -63,7 +63,7 @@
 | ML — Built-in | Holt-Winters, Z-Score, IQR, Isolation Forest (TypeScript) |
 | ML — Python | Prophet, Prophet + Weather Regressors, Isolation Forest, LSTM Autoencoder, One-Class SVM, Ensemble Anomaly, Q-Learning RL |
 | Auth | JWT (jose), bcryptjs, RBAC (Admin / Operator / Viewer) |
-| Notifications | Discord Webhook, LINE Notify |
+| Notifications | Discord Webhook |
 | Weather | OpenWeatherMap API |
 
 ---
@@ -103,7 +103,6 @@ cp .env.example .env.local
 | `PYTHON_PATH` | ❌ | Path ของ Python executable |
 | `OPENWEATHER_API_KEY` | ❌ | OpenWeatherMap API key |
 | `DISCORD_WEBHOOK_URL` | ❌ | Discord Webhook สำหรับแจ้งเตือน |
-| `LINE_NOTIFY_TOKEN` | ❌ | LINE Notify token |
 | `ML_CACHE_TTL_MS` | ❌ | TTL ของ ML cache (default: 300000) |
 
 ### 3. ติดตั้ง Python ML *(ไม่บังคับ)*
@@ -268,7 +267,7 @@ Connection Pool ตั้งค่าไว้ที่ `maxPoolSize: 10` พร
 | `name` | String | ชื่อผู้ใช้ |
 | `role` | `admin` \| `operator` \| `viewer` | บทบาท RBAC |
 | `assignedRooms` | String[] | รายการ Room ID ที่ Operator รับผิดชอบ |
-| `notificationPreferences` | Object | ตั้งค่าการแจ้งเตือน Discord / LINE / Email |
+| `notificationPreferences` | Object | ตั้งค่าการแจ้งเตือน Discord / Email |
 | `lastLogin` | Date | เวลา login ล่าสุด |
 | `loginAttempts` | Number | จำนวนครั้งที่ login ผิดพลาด |
 | `lockedUntil` | Date | เวลาที่ account ถูก lock |
@@ -287,7 +286,7 @@ Connection Pool ตั้งค่าไว้ที่ `maxPoolSize: 10` พร
 | `location` | String | สถานที่ตั้ง |
 | `thresholds.temperature` | `{ min, max }` | ขอบเกณฑ์อุณหภูมิ (°C) ค่า default 20–30 |
 | `thresholds.humidity` | `{ min, max }` | ขอบเกณฑ์ความชื้น (%) ค่า default 40–60 |
-| `notifications` | Object | ตั้งค่าแจ้งเตือน Discord/LINE ต่อห้อง |
+| `notifications` | Object | ตั้งค่าแจ้งเตือน Discord ต่อห้อง |
 | `externalWeather` | Object | เปิดใช้อากาศภายนอก + พิกัด GPS |
 | `acOptimization` | Object | ตั้งค่า AC Optimization (RL) |
 | `isActive` | Boolean | Soft Delete |

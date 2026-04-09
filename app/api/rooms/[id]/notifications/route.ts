@@ -21,7 +21,6 @@ export async function GET(
 
     const notifications: RoomNotificationSettings = room.notifications ?? {
       discord: { enabled: false, webhookUrl: '' },
-      line: { enabled: false, accessToken: '' },
       alertOnThreshold: true,
       alertOnAnomaly: true,
       alertOnOffline: true,

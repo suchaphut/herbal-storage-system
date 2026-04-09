@@ -70,7 +70,7 @@ export async function GET(request: NextRequest) {
   }
 }
 
-// POST /api/sensors - Create new sensor (Admin only)
+// POST /api/sensors - Create new sensor (Admin: any room; Operator: assigned rooms only)
 export async function POST(request: NextRequest) {
   const { ipAddress, userAgent } = getClientInfo(request)
 
@@ -94,6 +94,23 @@ export async function POST(request: NextRequest) {
       )
     }
 
+    // Operators can only create sensors in their assigned rooms
+    const { session } = authResult
+    if (session.role === 'operator') {
+      if (!roomId) {
+        return NextResponse.json(
+          { success: false, error: 'ต้องกำหนดห้องสำหรับเซ็นเซอร์' },
+          { status: 400 }
+        )
+      }
+      if (!session.assignedRooms.includes(String(roomId))) {
+        return NextResponse.json(
+          { success: false, error: 'ไม่มีสิทธิ์จัดการเซ็นเซอร์ในห้องนี้' },
+          { status: 403 }
+        )
+      }
+    }
+
     // Check if nodeId already exists
     const existing = await db.getSensorNodeByNodeId(nodeId)
     if (existing) {
@@ -115,7 +132,6 @@ export async function POST(request: NextRequest) {
     })
 
     // Log the action
-    const { session } = authResult
     await auditLogService.create({
       userId: session.userId,
       userEmail: session.email,

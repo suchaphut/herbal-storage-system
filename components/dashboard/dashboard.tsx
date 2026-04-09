@@ -33,6 +33,7 @@ import type {
   SensorNode,
   Alert,
   EnvironmentalSensorData,
+  PowerSensorData,
   MLAnalysisResult,
   ExternalWeatherData,
   ClimateAnalysis,
@@ -94,7 +95,7 @@ export function Dashboard() {
 
   const { data: selectedRoomData } = useSWR<{
     success: boolean
-    data: { room: Room; nodes: SensorNode[]; sensorData: EnvironmentalSensorData[] }
+    data: { room: Room; nodes: SensorNode[]; sensorData: EnvironmentalSensorData[]; powerData: PowerSensorData[] }
   }>(selectedRoomId ? `/api/rooms/${selectedRoomId}` : null, fetcher, {
     refreshInterval: 5000,
   })
@@ -321,7 +322,9 @@ export function Dashboard() {
                     <TabsContent value="sensors">
                       <SensorChart
                         data={selectedRoomData.data.sensorData || []}
+                        powerData={selectedRoomData.data.powerData || []}
                         room={selectedRoomData.data.room}
+                        nodes={selectedRoomData.data.nodes}
                         title={`ข้อมูลเซ็นเซอร์ - ${selectedRoomData.data.room?.name || ''}`}
                       />
                     </TabsContent>

@@ -17,8 +17,6 @@ const UserSchema = new Schema({
   notificationPreferences: {
     discord: { type: Boolean, default: false },
     discordWebhookUrl: { type: String, default: '' },
-    line: { type: Boolean, default: false },
-    lineAccessToken: { type: String, default: '' },
     email: { type: Boolean, default: true }
   },
   lastLogin: { type: Date, default: null },
@@ -49,10 +47,6 @@ const RoomSchema = new Schema({
     discord: {
       enabled: { type: Boolean, default: false },
       webhookUrl: { type: String, default: '' },
-    },
-    line: {
-      enabled: { type: Boolean, default: false },
-      accessToken: { type: String, default: '' },
     },
     alertOnThreshold: { type: Boolean, default: true },
     alertOnAnomaly: { type: Boolean, default: true },

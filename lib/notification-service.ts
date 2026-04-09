@@ -3,7 +3,6 @@
  *
  * Supports:
  * - Discord Webhook notifications with rich embeds
- * - LINE Notify notifications
  * - ML-based intelligent alerting
  */
 
@@ -23,10 +22,6 @@ interface NotificationConfig {
     enabled: boolean
     webhookUrl: string
   }
-  line?: {
-    enabled: boolean
-    accessToken: string
-  }
 }
 
 // Get notification config from environment (global fallback)
@@ -35,10 +30,6 @@ function getConfig(): NotificationConfig {
     discord: {
       enabled: !!process.env.DISCORD_WEBHOOK_URL,
       webhookUrl: process.env.DISCORD_WEBHOOK_URL || '',
-    },
-    line: {
-      enabled: !!process.env.LINE_NOTIFY_TOKEN,
-      accessToken: process.env.LINE_NOTIFY_TOKEN || '',
     },
   }
 }
@@ -349,197 +340,6 @@ export async function sendDiscordPredictionWarning(
 }
 
 /**
- * Internal: send a LINE Notify message with an explicit access token.
- */
-async function sendLineNotificationWithConfig(
-  accessToken: string,
-  alert: Alert,
-  room?: Room | null,
-  node?: SensorNode | null
-): Promise<boolean> {
-  const emoji = severityEmojis[alert.severity]
-  const roomName = room?.name || th.notification.unknown
-  const nodeName = node?.name || alert.nodeId || th.notification.unknown
-  const time = new Date(alert.createdAt).toLocaleString('th-TH')
-
-  const sourceLabelsLine: Record<string, string> = {
-    threshold: '📏 ค่าเกินขีดจำกัดจริง (Threshold)',
-    ml_environmental: '🤖 ML ตรวจพบค่าผิดปกติ (Environmental)',
-    ml_power: '🤖 ML ตรวจพบค่าผิดปกติ (Power)',
-  }
-  const sourceLine = alert.data.source ? (sourceLabelsLine[alert.data.source] ?? alert.data.source) : null
-
-  let message = `\n${emoji} แจ้งเตือน: ${alert.message}\n`
-  message += `${th.notification.fieldRoom}: ${roomName}\n`
-  message += `${th.notification.fieldSensor}: ${nodeName}\n`
-  message += `${th.notification.fieldTime}: ${time}`
-
-  if (sourceLine) {
-    message += `\n🔍 แหล่งที่มา: ${sourceLine}`
-  }
-  if (alert.data.value !== undefined) {
-    message += `\n${th.notification.fieldValue}: ${alert.data.value}`
-  }
-  if (alert.data.threshold !== undefined) {
-    message += `\n${th.notification.fieldThreshold}: ${alert.data.threshold}`
-  }
-  if (alert.data.anomalyScore !== undefined) {
-    message += `\n${th.notification.fieldAnomalyScore}: ${(alert.data.anomalyScore * 100).toFixed(0)}%`
-  }
-  if (alert.data.offlineMinutes !== undefined) {
-    message += `\n⏱️ ออฟไลน์: ${alert.data.offlineMinutes} นาที`
-  }
-  if (alert.data.lastSeen != null) {
-    message += `\n📡 ส่งข้อมูลล่าสุด: ${new Date(String(alert.data.lastSeen)).toLocaleString('th-TH')}`
-  }
-
-  try {
-    const response = await fetch('https://notify-api.line.me/api/notify', {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/x-www-form-urlencoded',
-        Authorization: `Bearer ${accessToken}`,
-      },
-      body: new URLSearchParams({ message }),
-    })
-    if (!response.ok) {
-      console.error('[LINE] Failed to send notification:', response.status)
-      return false
-    }
-    console.log('[LINE] Notification sent successfully')
-    return true
-  } catch (error) {
-    console.error('[LINE] Error sending notification:', error)
-    return false
-  }
-}
-
-/**
- * Send notification to LINE via LINE Notify API
- */
-export async function sendLineNotification(
-  alert: Alert,
-  room?: Room | null,
-  node?: SensorNode | null
-): Promise<boolean> {
-  const config = getConfig()
-  if (!config.line?.enabled) {
-    console.log('[Notification] LINE Notify is not configured')
-    return false
-  }
-  return sendLineNotificationWithConfig(config.line.accessToken, alert, room, node)
-}
-
-/**
- * Send ML anomaly notification to LINE
- */
-export async function sendLineAnomalyAlert(
-  anomaly: AnomalyDetectionResult,
-  userFriendly: UserFriendlyAnomaly,
-  room?: Room | null,
-  node?: SensorNode | null
-): Promise<boolean> {
-  const config = getConfig()
-
-  if (!config.line?.enabled) {
-    console.log('[Notification] LINE Notify is not configured')
-    return false
-  }
-
-  const emoji = severityEmojis[userFriendly.severity]
-  const roomName = room?.name || th.notification.unknown
-  const nodeName = node?.name || anomaly.nodeId || th.notification.unknown
-
-  let message = `\n${emoji} ${userFriendly.type}\n`
-  message += `${th.notification.fieldRoom}: ${roomName}\n`
-  message += `${th.notification.fieldSensor}: ${nodeName}\n`
-  message += `${th.notification.fieldTemp}: ${anomaly.actualValues.temperature.toFixed(1)}°C\n`
-  message += `${th.notification.fieldHumidity}: ${anomaly.actualValues.humidity.toFixed(0)}%\n`
-  message += `${th.notification.fieldAnomalyScore}: ${(anomaly.anomalyScore * 100).toFixed(0)}%\n\n`
-  message += `${th.notification.fieldCauses}:\n`
-  message += userFriendly.possibleCauses.slice(0, 2).map((c) => `• ${c}`).join('\n')
-  message += `\n\n${th.notification.fieldRecommendation}:\n`
-  message += userFriendly.recommendations.slice(0, 2).map((r) => `• ${r}`).join('\n')
-
-  try {
-    const response = await fetch('https://notify-api.line.me/api/notify', {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/x-www-form-urlencoded',
-        Authorization: `Bearer ${config.line.accessToken}`,
-      },
-      body: new URLSearchParams({ message }),
-    })
-
-    if (!response.ok) {
-      console.error('[LINE] Failed to send anomaly alert:', response.status)
-      return false
-    }
-
-    console.log('[LINE] Anomaly alert sent successfully')
-    return true
-  } catch (error) {
-    console.error('[LINE] Error sending anomaly alert:', error)
-    return false
-  }
-}
-
-/**
- * Send ML prediction warning to LINE
- */
-export async function sendLinePredictionWarning(
-  prediction: UserFriendlyPrediction,
-  room?: Room | null
-): Promise<boolean> {
-  const config = getConfig()
-
-  if (!config.line?.enabled || prediction.riskLevel === 'safe') {
-    return false
-  }
-
-  const emoji = prediction.riskLevel === 'danger' ? '🚨' : '⚠️'
-  const roomName = room?.name || th.notification.unknown
-  const trendText =
-    prediction.trend === 'increasing'
-      ? th.notification.trendUp
-      : prediction.trend === 'decreasing'
-        ? th.notification.trendDown
-        : th.notification.trendStable
-
-  let message = `\n${emoji} ${th.notification.predictionAlert}\n`
-  message += `${th.notification.fieldRoom}: ${roomName}\n`
-  message += `${th.notification.fieldTrend}: ${trendText}\n`
-  message += `📊 ${prediction.summary}\n`
-  message += `${th.notification.fieldRecommendation}: ${prediction.recommendation}`
-
-  if (prediction.warningTime) {
-    message += `\n${th.notification.expectedThreshold}: ${new Date(prediction.warningTime).toLocaleString('th-TH')}`
-  }
-
-  try {
-    const response = await fetch('https://notify-api.line.me/api/notify', {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/x-www-form-urlencoded',
-        Authorization: `Bearer ${config.line.accessToken}`,
-      },
-      body: new URLSearchParams({ message }),
-    })
-
-    if (!response.ok) {
-      console.error('[LINE] Failed to send prediction warning:', response.status)
-      return false
-    }
-
-    console.log('[LINE] Prediction warning sent successfully')
-    return true
-  } catch (error) {
-    console.error('[LINE] Error sending prediction warning:', error)
-    return false
-  }
-}
-
-/**
  * Send notification to a single user via their personal webhook settings.
  */
 export async function sendNotificationToUser(
@@ -547,22 +347,15 @@ export async function sendNotificationToUser(
   alert: Alert,
   room?: Room | null,
   node?: SensorNode | null
-): Promise<{ discord: boolean; line: boolean }> {
+): Promise<{ discord: boolean }> {
   const prefs = user.notificationPreferences
-  const tasks: [Promise<boolean>, Promise<boolean>] = [
-    Promise.resolve(false),
-    Promise.resolve(false),
-  ]
 
   if (prefs?.discord && prefs.discordWebhookUrl) {
-    tasks[0] = sendDiscordNotificationWithConfig(prefs.discordWebhookUrl, alert, room, node)
-  }
-  if (prefs?.line && prefs.lineAccessToken) {
-    tasks[1] = sendLineNotificationWithConfig(prefs.lineAccessToken, alert, room, node)
+    const discord = await sendDiscordNotificationWithConfig(prefs.discordWebhookUrl, alert, room, node)
+    return { discord }
   }
 
-  const [discord, line] = await Promise.all(tasks)
-  return { discord, line }
+  return { discord: false }
 }
 
 /**
@@ -585,9 +378,9 @@ function isAlertTypeEnabledForRoom(room: Room | null | undefined, alertType: str
  * Admins receive alerts for all rooms. Operators/viewers only for assigned rooms.
  *
  * Priority order:
- * 1. Per-user webhooks (users with personal Discord/LINE configured)
- * 2. Per-room webhooks (room-level Discord/LINE configured in room settings)
- * 3. Global env webhooks (DISCORD_WEBHOOK_URL / LINE_NOTIFY_TOKEN)
+ * 1. Per-user webhooks (users with personal Discord webhook configured)
+ * 2. Per-room webhooks (room-level Discord webhook configured in room settings)
+ * 3. Global env webhook (DISCORD_WEBHOOK_URL)
  */
 export async function sendNotificationToRoomUsers(
   users: User[],
@@ -618,14 +411,10 @@ export async function sendNotificationToRoomUsers(
 
   // 1. Send per-user webhooks to users who have them configured
   const withWebhook = responsible.filter(
-    (u) =>
-      (u.notificationPreferences?.discord && u.notificationPreferences?.discordWebhookUrl) ||
-      (u.notificationPreferences?.line && u.notificationPreferences?.lineAccessToken)
+    (u) => u.notificationPreferences?.discord && u.notificationPreferences?.discordWebhookUrl
   )
   const withoutWebhook = responsible.filter(
-    (u) =>
-      !(u.notificationPreferences?.discord && u.notificationPreferences?.discordWebhookUrl) &&
-      !(u.notificationPreferences?.line && u.notificationPreferences?.lineAccessToken)
+    (u) => !(u.notificationPreferences?.discord && u.notificationPreferences?.discordWebhookUrl)
   )
 
   if (withWebhook.length > 0) {
@@ -652,19 +441,14 @@ export async function sendNotificationToRoomUsers(
       const ok = await sendDiscordNotificationWithConfig(roomNotif.discord.webhookUrl, alert, room, node)
       if (ok) sentViaRoom = true
     }
-    if (roomNotif.line?.enabled && roomNotif.line?.accessToken) {
-      console.log(`[Notification] Using room-level LINE token for ${room?.name}`)
-      const ok = await sendLineNotificationWithConfig(roomNotif.line.accessToken, alert, room, node)
-      if (ok) sentViaRoom = true
-    }
     if (sentViaRoom) return
   }
 
   // 3. Fallback: global env webhooks
   console.log('[Notification] No room webhooks — trying global env fallback')
   const globalResult = await sendNotification(alert, room, node)
-  if (!globalResult.discord && !globalResult.line) {
-    console.log('[Notification] No global webhooks configured either — notification not sent')
+  if (!globalResult.discord) {
+    console.log('[Notification] No global webhook configured either — notification not sent')
   }
 }
 
@@ -675,22 +459,15 @@ export async function sendNotification(
   alert: Alert,
   room?: Room | null,
   node?: SensorNode | null
-): Promise<{ discord: boolean; line: boolean }> {
+): Promise<{ discord: boolean }> {
   const config = getConfig()
-  const tasks: [Promise<boolean>, Promise<boolean>] = [
-    Promise.resolve(false),
-    Promise.resolve(false),
-  ]
 
   if (config.discord?.enabled) {
-    tasks[0] = sendDiscordNotificationWithConfig(config.discord.webhookUrl, alert, room, node)
-  }
-  if (config.line?.enabled) {
-    tasks[1] = sendLineNotificationWithConfig(config.line.accessToken, alert, room, node)
+    const discord = await sendDiscordNotificationWithConfig(config.discord.webhookUrl, alert, room, node)
+    return { discord }
   }
 
-  const [discord, line] = await Promise.all(tasks)
-  return { discord, line }
+  return { discord: false }
 }
 
 /**
@@ -702,30 +479,22 @@ export async function sendMLAlerts(
   userFriendlyPrediction: UserFriendlyPrediction,
   room?: Room | null,
   node?: SensorNode | null
-): Promise<{ discord: boolean; line: boolean }> {
+): Promise<{ discord: boolean }> {
   const config = getConfig()
-  const results = { discord: false, line: false }
+  const results = { discord: false }
 
   // Send anomaly alerts if anomaly detected
   if (anomaly.isAnomaly && userFriendlyAnomaly) {
-    const promises: Promise<boolean>[] = [
-      config.discord?.enabled ? sendDiscordAnomalyAlert(anomaly, userFriendlyAnomaly, room, node) : Promise.resolve(false),
-      config.line?.enabled ? sendLineAnomalyAlert(anomaly, userFriendlyAnomaly, room, node) : Promise.resolve(false),
-    ]
-    const [discordAnomaly, lineAnomaly] = await Promise.all(promises)
-    results.discord = discordAnomaly
-    results.line = lineAnomaly
+    if (config.discord?.enabled) {
+      results.discord = await sendDiscordAnomalyAlert(anomaly, userFriendlyAnomaly, room, node)
+    }
   }
 
   // Send prediction warnings if risk level is not safe
   if (userFriendlyPrediction.riskLevel !== 'safe') {
-    const promises: Promise<boolean>[] = [
-      config.discord?.enabled ? sendDiscordPredictionWarning(userFriendlyPrediction, room) : Promise.resolve(false),
-      config.line?.enabled ? sendLinePredictionWarning(userFriendlyPrediction, room) : Promise.resolve(false),
-    ]
-    const [discordPred, linePred] = await Promise.all(promises)
-    results.discord = results.discord || discordPred
-    results.line = results.line || linePred
+    if (config.discord?.enabled) {
+      results.discord = results.discord || await sendDiscordPredictionWarning(userFriendlyPrediction, room)
+    }
   }
 
   return results
@@ -736,7 +505,6 @@ export async function sendMLAlerts(
  */
 export async function testNotifications(): Promise<{
   discord: { configured: boolean; test: boolean }
-  line: { configured: boolean; test: boolean }
 }> {
   const config = getConfig()
 
@@ -759,18 +527,10 @@ export async function testNotifications(): Promise<{
       configured: config.discord?.enabled || false,
       test: false,
     },
-    line: {
-      configured: config.line?.enabled || false,
-      test: false,
-    },
   }
 
   if (config.discord?.enabled) {
     results.discord.test = await sendDiscordNotification(testAlert)
-  }
-
-  if (config.line?.enabled) {
-    results.line.test = await sendLineNotification(testAlert)
   }
 
   return results

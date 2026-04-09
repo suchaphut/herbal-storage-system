@@ -1,7 +1,7 @@
 'use client'
 
 import { useState, useEffect } from 'react'
-import { Save, MessageSquare, Send, CheckCircle2, AlertCircle, Bell } from 'lucide-react'
+import { Save, MessageSquare, CheckCircle2, AlertCircle, Bell } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import {
   Dialog,
@@ -19,16 +19,12 @@ import { Separator } from '@/components/ui/separator'
 interface UserNotifPrefs {
   discord: boolean
   discordWebhookUrl: string
-  line: boolean
-  lineAccessToken: string
   email: boolean
 }
 
 const DEFAULT_PREFS: UserNotifPrefs = {
   discord: false,
   discordWebhookUrl: '',
-  line: false,
-  lineAccessToken: '',
   email: true,
 }
 
@@ -90,7 +86,7 @@ export function UserNotificationSettings({ trigger }: UserNotificationSettingsPr
         <DialogHeader>
           <DialogTitle>การตั้งค่าการแจ้งเตือนส่วนตัว</DialogTitle>
           <DialogDescription>
-            กำหนด Discord Webhook URL และ LINE Access Token ของคุณเอง
+            กำหนด Discord Webhook URL ของคุณเอง
             ระบบจะใช้ค่านี้ส่งการแจ้งเตือนมาหาคุณโดยตรง
           </DialogDescription>
         </DialogHeader>
@@ -121,37 +117,6 @@ export function UserNotificationSettings({ trigger }: UserNotificationSettingsPr
                 value={prefs.discordWebhookUrl}
                 disabled={!prefs.discord || isLoading}
                 onChange={(e) => setPrefs({ ...prefs, discordWebhookUrl: e.target.value })}
-              />
-            </div>
-          </div>
-
-          <Separator />
-
-          {/* LINE */}
-          <div className="space-y-3">
-            <div className="flex items-center gap-2">
-              <div className="rounded-md bg-[#00B900]/10 p-1.5">
-                <Send className="h-4 w-4 text-[#00B900]" />
-              </div>
-              <span className="text-sm font-medium">LINE Notify</span>
-              <Switch
-                className="ml-auto"
-                disabled={isLoading}
-                checked={prefs.line}
-                onCheckedChange={(checked) => setPrefs({ ...prefs, line: checked })}
-              />
-            </div>
-            <div className="grid gap-1.5">
-              <Label htmlFor="u-line-token" className="text-xs text-muted-foreground">
-                Access Token
-              </Label>
-              <Input
-                id="u-line-token"
-                type="password"
-                placeholder="LINE Notify Access Token"
-                value={prefs.lineAccessToken}
-                disabled={!prefs.line || isLoading}
-                onChange={(e) => setPrefs({ ...prefs, lineAccessToken: e.target.value })}
               />
             </div>
           </div>

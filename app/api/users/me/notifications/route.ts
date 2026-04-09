@@ -17,8 +17,6 @@ export async function GET(request: NextRequest) {
     const prefs = user.notificationPreferences ?? {
       discord: false,
       discordWebhookUrl: '',
-      line: false,
-      lineAccessToken: '',
       email: true,
     }
 
@@ -37,7 +35,7 @@ export async function PATCH(request: NextRequest) {
   try {
     const body = await request.json()
 
-    const allowed = ['discord', 'discordWebhookUrl', 'line', 'lineAccessToken', 'email']
+    const allowed = ['discord', 'discordWebhookUrl', 'email']
     const prefs: Record<string, unknown> = {}
     for (const key of allowed) {
       if (key in body) prefs[key] = body[key]

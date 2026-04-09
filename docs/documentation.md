@@ -13,7 +13,7 @@
 - **Database** — MongoDB 7+ ผ่าน Mongoose ODM
 - **ML Service** — TypeScript (built-in) + Python (optional) ผ่าน child_process bridge
 - **IoT Integration** — ESP32 ส่งข้อมูลผ่าน REST API `POST /api/data/ingest`
-- **Notifications** — Discord Webhook + LINE Notify
+- **Notifications** — Discord Webhook
 - **Weather** — OpenWeatherMap API สำหรับข้อมูลอากาศภายนอก
 
 ## 3. เทคโนโลยีที่ใช้
@@ -26,7 +26,7 @@
 | ML — Built-in | Holt-Winters, Z-Score, IQR, Isolation Forest (TypeScript) |
 | ML — Python | Prophet, Prophet + Weather Regressors, Isolation Forest, LSTM Autoencoder, One-Class SVM, Ensemble, Q-Learning RL |
 | Auth | JWT (jose), bcryptjs |
-| Notifications | Discord Webhook, LINE Notify |
+| Notifications | Discord Webhook |
 | Weather | OpenWeatherMap API |
 
 ## 4. คุณสมบัติหลัก
@@ -38,7 +38,7 @@
 
 ### 4.2 การแจ้งเตือนอัตโนมัติ
 - แจ้งเตือนเมื่อค่าเกินเกณฑ์ที่กำหนดของแต่ละห้อง
-- ส่งผ่าน Discord Webhook และ LINE Notify
+- ส่งผ่าน Discord Webhook
 - Audit Log บันทึกทุก action
 
 ### 4.3 การตรวจจับความผิดปกติ (Anomaly Detection)
@@ -103,7 +103,6 @@ cp .env.example .env.local
 | `ENABLE_PYTHON_ML` | ❌ | `1` เปิดใช้ Python ML |
 | `OPENWEATHER_API_KEY` | ❌ | OpenWeatherMap API key |
 | `DISCORD_WEBHOOK_URL` | ❌ | Discord Webhook |
-| `LINE_NOTIFY_TOKEN` | ❌ | LINE Notify token |
 
 ### 5.3 Seed ข้อมูลเริ่มต้น
 

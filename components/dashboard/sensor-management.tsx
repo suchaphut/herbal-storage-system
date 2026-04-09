@@ -77,10 +77,12 @@ export function SensorManagement({
   rooms,
   onUpdate,
 }: SensorManagementProps) {
-  const { hasPermission } = useAuth()
+  const { hasPermission, canAccessRoom } = useAuth()
   const canCreate = hasPermission('canCreateSensor')
   const canEdit = hasPermission('canEditSensor')
   const canDelete = hasPermission('canDeleteSensor')
+  const canManageAssignedOnly = hasPermission('canManageAssignedSensorsOnly')
+  const accessibleRooms = canManageAssignedOnly ? rooms.filter((r) => canAccessRoom(r._id)) : rooms
   const [isDialogOpen, setIsDialogOpen] = useState(false)
   const [editingSensor, setEditingSensor] = useState<SensorNode | null>(null)
   const [formData, setFormData] = useState<SensorFormData>(defaultFormData)
@@ -222,13 +224,16 @@ export function SensorManagement({
           </p>
         </div>
         {canCreate && (
+          <Button onClick={() => handleOpenDialog()}>
+            <Plus className="mr-2 h-4 w-4" />
+            เพิ่มเซ็นเซอร์
+          </Button>
+        )}
+      </div>
+
+      {/* Dialog — rendered whenever canCreate or canEdit so operators can open edit dialog */}
+      {(canCreate || canEdit) && (
         <Dialog open={isDialogOpen} onOpenChange={setIsDialogOpen}>
-          <DialogTrigger asChild>
-            <Button onClick={() => handleOpenDialog()}>
-              <Plus className="mr-2 h-4 w-4" />
-              เพิ่มเซ็นเซอร์
-            </Button>
-          </DialogTrigger>
           <DialogContent className="sm:max-w-lg">
             <DialogHeader>
               <DialogTitle>
@@ -305,8 +310,10 @@ export function SensorManagement({
                     <SelectValue placeholder="เลือกห้อง" />
                   </SelectTrigger>
                   <SelectContent>
-                    <SelectItem value="none">ยังไม่กำหนด</SelectItem>
-                    {rooms.map((room) => (
+                    {!canManageAssignedOnly && (
+                      <SelectItem value="none">ยังไม่กำหนด</SelectItem>
+                    )}
+                    {accessibleRooms.map((room) => (
                       <SelectItem key={room._id} value={room._id}>
                         {room.name}
                       </SelectItem>
@@ -355,8 +362,7 @@ export function SensorManagement({
             </DialogFooter>
           </DialogContent>
         </Dialog>
-        )}
-      </div>
+      )}
 
       {/* Info Card */}
       <Card className="border-primary/20 bg-primary/5">

@@ -86,8 +86,6 @@ function toSafeUser(user: User | Record<string, unknown>): SafeUser {
     notificationPreferences: {
       discord: prefs?.discord ?? false,
       hasDiscordWebhook: !!(prefs?.discordWebhookUrl),
-      line: prefs?.line ?? false,
-      hasLineToken: !!(prefs?.lineAccessToken),
       email: prefs?.email ?? true,
     },
     lastLogin: u.lastLogin ?? null,

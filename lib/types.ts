@@ -7,10 +7,6 @@ export interface RoomNotificationSettings {
     enabled: boolean
     webhookUrl: string
   }
-  line: {
-    enabled: boolean
-    accessToken: string
-  }
   alertOnThreshold: boolean
   alertOnAnomaly: boolean
   alertOnOffline: boolean
@@ -171,9 +167,9 @@ export const ROLE_PERMISSIONS: Record<UserRole, RolePermissions> = {
     canEditRoom: false,
     canDeleteRoom: false,
     canViewRooms: true,
-    canCreateSensor: false,
+    canCreateSensor: true,
     canEditSensor: true,
-    canDeleteSensor: false,
+    canDeleteSensor: true,
     canViewSensors: true,
     canManageAssignedSensorsOnly: true,
     canViewRealtimeData: true,
@@ -216,8 +212,6 @@ export interface User {
   notificationPreferences: {
     discord: boolean
     discordWebhookUrl: string
-    line: boolean
-    lineAccessToken: string
     email: boolean
   }
   lastLogin: Date | null
@@ -238,8 +232,6 @@ export interface SafeUser {
   notificationPreferences: {
     discord: boolean
     hasDiscordWebhook: boolean  // true if webhook URL is configured (URL itself is not sent to client)
-    line: boolean
-    hasLineToken: boolean       // true if LINE token is configured (token itself is not sent to client)
     email: boolean
   }
   lastLogin: Date | null
@@ -289,8 +281,6 @@ export interface UpdateUserRequest {
   notificationPreferences?: {
     discord: boolean
     discordWebhookUrl?: string
-    line: boolean
-    lineAccessToken?: string
     email: boolean
   }
   isActive?: boolean

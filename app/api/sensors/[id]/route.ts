@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { z } from 'zod'
 import { dbService as db } from '@/lib/db-service'
-import { verifyAuth, requireSensorManagement, requirePermission } from '@/lib/auth-middleware'
+import { verifyAuth, requireSensorManagement } from '@/lib/auth-middleware'
 import { auditLogService, getClientInfo } from '@/lib/audit-log-service'
 
 // ─── Zod schema for sensor update validation ────────────────────────────────
@@ -147,31 +147,31 @@ export async function PUT(
   }
 }
 
-// DELETE /api/sensors/[id] - Delete sensor (Admin only)
+// DELETE /api/sensors/[id] - Delete sensor (Admin: any; Operator: assigned rooms only)
 export async function DELETE(
   request: NextRequest,
   { params }: { params: Promise<{ id: string }> }
 ) {
   const { ipAddress, userAgent } = getClientInfo(request)
 
-  // Check permission to delete sensors (Admin only)
-  const authResult = await requirePermission(request, 'canDeleteSensor')
-  if (!authResult.success) {
-    return NextResponse.json(
-      { success: false, error: authResult.error },
-      { status: authResult.status }
-    )
-  }
-
   try {
     const { id } = await params
 
-    // Get sensor info for logging
+    // Get sensor first to check room assignment for permission check
     const node = await db.getSensorNodeById(id)
     if (!node) {
       return NextResponse.json(
         { success: false, error: 'ไม่พบเซ็นเซอร์ที่ระบุ' },
         { status: 404 }
+      )
+    }
+
+    // Check permission — operators may only delete sensors in assigned rooms
+    const authResult = await requireSensorManagement(request, node.roomId ? String(node.roomId) : null)
+    if (!authResult.success) {
+      return NextResponse.json(
+        { success: false, error: authResult.error },
+        { status: authResult.status }
       )
     }
 

@@ -77,12 +77,25 @@ export async function GET(
         readings: d.readings,
       }))
 
+    const rawPowerData = await db.getSensorDataByRoomAndType(id, 'power', 200)
+    const powerData = (rawPowerData || [])
+      .filter((d) => d.readings && 'current' in d.readings)
+      .map((d) => ({
+        _id: String(d._id),
+        nodeId: d.nodeId,
+        roomId: d.roomId != null ? String(d.roomId) : null,
+        timestamp: d.timestamp instanceof Date ? d.timestamp.toISOString() : d.timestamp,
+        type: d.type,
+        readings: d.readings,
+      }))
+
     return NextResponse.json({
       success: true,
       data: {
         room,
         nodes: nodes || [],
         sensorData,
+        powerData,
       },
     })
   } catch (error) {
